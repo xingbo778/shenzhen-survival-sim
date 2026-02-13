@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-深圳生存模拟 - 世界引擎 v8.3
+深圳生存模拟 - 世界引擎 v8.3.2
 =========================
+v8.3.2 新增:
+- world端点字段补全 (long_term_goal/narrative_summary/pending_reply_to)
+- 起床动作硬编码 (绕过LLM)
+- JSON清洗增强 (trailing comma/控制字符)
+- API优雅降级 (拍照失败记录事件)
+- 动态经济系统 (食物供需价格)
 v8.3 新增:
 - 情感系统重塑 (衰减平衡，积极反馈)
 - 状态同步总线 (bot_agent完整状态同步)
@@ -370,6 +376,7 @@ world = {
     "message_board": [],   # 消息板
     "moments": [],         # 朋友圈 (所有帖子)
     "gallery": [],         # 照片墙
+    "food_prices": {},      # v8.3.2: 动态食物价格
 }
 
 
@@ -848,6 +855,14 @@ def world_tick():
                         world["locations"]["东门老街"]["bots"].append(bid2)
                     log.warning(f"{bid2} 交不起房租，被驱逐到东门老街!")
 
+        # v8.3.2: 动态经济 - 每日6:00食物价格自然回落
+        if vh == 6:
+            dp = world.get("food_prices", {})
+            for fname, base_food in FOOD_MENU.items():
+                if fname in dp and dp[fname] > base_food["cost"]:
+                    dp[fname] = max(base_food["cost"], dp[fname] - max(1, base_food["cost"] // 10))
+            world["food_prices"] = dp
+
         # 随机事件（提高概率，让环境更活跃）
         event_chance = 0.20 + WEATHER_TYPES.get(world["weather"]["current"], {}).get("event_chance_mod", 0)
         if random.random() < event_chance:
@@ -971,6 +986,18 @@ def trigger_event():
 def process_action(bot_id, plan):
     """涌现友好架构：LLM解析为5大类 + 保留自然语言描述，世界引擎解释后果"""
     bot = world["bots"][bot_id]
+
+    # v8.3.2: 硬编码起床动作，不经过LLM
+    if plan.strip() in ("起床", "醒来", "起来"):
+        action = {"category": "survive", "type": "wake_up", "desc": plan}
+        result = execute(bot_id, action)
+        bot["action_log"].append({
+            "tick": world["time"]["tick"],
+            "time": world["time"]["virtual_datetime"],
+            "plan": plan, "action": action, "result": result
+        })
+        return {"action": action, "result": result}
+
     loc = bot["location"]
     loc_info = world["locations"][loc]
 
@@ -1174,17 +1201,25 @@ def execute(bot_id, action):
         if not food:
             food_name = "城中村快餐"
             food = FOOD_MENU[food_name]
-        if bot["money"] >= food["cost"]:
-            bot["money"] -= food["cost"]
+        # v8.3.2: 动态价格 - 用当前动态价格而非基础价格
+        dynamic_prices = world.get("food_prices", {})
+        current_cost = dynamic_prices.get(food_name, food["cost"])
+        if bot["money"] >= current_cost:
+            bot["money"] -= current_cost
             bot["satiety"] = min(100, bot["satiety"] + food["satiety"])
             # 食物影响情绪
             for emo_key, delta in food.get("mood", {}).items():
                 emotions[emo_key] = max(0, min(100, emotions.get(emo_key, 0) + delta))
             bot["emotions"] = emotions
-            msg = f'吃了{food_name}，花费{food["cost"]}元，饱腹度+{food["satiety"]}'
+            # 动态经济：购买后微幅涨价
+            base_cost = food["cost"]
+            new_price = min(int(base_cost * 1.5), current_cost + max(1, base_cost // 10))
+            dynamic_prices[food_name] = new_price
+            world["food_prices"] = dynamic_prices
+            msg = f'吃了{food_name}，花费{current_cost}元，饱腹度+{food["satiety"]}'
             log.info(f"{bot_id}: {msg}")
             return msg
-        return f"钱不够买{food_name}(需要{food['cost']}元，只有{bot['money']}元)"
+        return f"钱不够买{food_name}(需要{current_cost}元，只有{bot['money']}元)"
 
     elif act == "talk":
         target = action.get("target", "")
@@ -1633,7 +1668,15 @@ warmth_delta范围-10到+10，正数表示关系升温，负数表示关系降�
                     })
                 log.info(f"{bot_id} 拍照成功: {filename}")
             else:
-                log.error(f"{bot_id} 拍照失败: {result.get('error')}")
+                err = result.get('error', '未知错误')
+                log.error(f"{bot_id} 拍照失败: {err}")
+                # v8.3.2: 优雅降级 - 记录失败体验而不是静默失败
+                with lock:
+                    world["events"].append({
+                        "tick": tick,
+                        "time": world["time"]["virtual_datetime"],
+                        "desc": f"{bot.get('name', bot_id)}想拍照但手机信号不好，没拍成"
+                    })
 
         Thread(target=_gen, daemon=True).start()
         msg = f"📸 正在拍照: {selfie_prompt[:60]}..."
@@ -1705,7 +1748,17 @@ def interpret_free_action(bot_id, bot, desc):
             end = raw.rfind("}") + 1
             if start >= 0 and end > start:
                 raw = raw[start:end]
-        result = json.loads(raw)
+        # v8.3.2: 增强JSON清洗 - 处理LLM常见的非法字符
+        raw = re.sub(r':\s*(-?\d+)\s*[+\-]', r': \1', raw)  # 数值后的+/-
+        raw = re.sub(r',\s*}', '}', raw)  # 尾部多余逗号
+        raw = re.sub(r',\s*]', ']', raw)  # 数组尾部多余逗号
+        raw = raw.replace('\n', ' ')  # 去掉字符串中的换行
+        try:
+            result = json.loads(raw)
+        except json.JSONDecodeError:
+            # 再次尝试：去掉所有控制字符
+            cleaned = re.sub(r'[\x00-\x1f]', ' ', raw)
+            result = json.loads(cleaned)
 
         # 应用数值变化
         narrative = result.get("narrative", desc)
@@ -1749,6 +1802,7 @@ def get_world():
             "events": world["events"][-10:],
             "active_effects": world["active_effects"],
             "moments": world["moments"][-20:],
+            "food_prices": world.get("food_prices", {}),
         }
         for bid, bot in world["bots"].items():
             safe["bots"][bid] = {
@@ -1765,6 +1819,11 @@ def get_world():
                 "selfie_count": bot.get("selfie_count", 0),
                 "aging_rate": bot.get("aging_rate", AGING_BASE),
                 "emotional_bonds_summary": {k: {"label": v.get("label", ""), "closeness": v.get("closeness", 0), "latest_impression": (v.get("impressions", []) or [""])[-1]} for k, v in bot.get("emotional_bonds", {}).items()},
+                "long_term_goal": bot.get("long_term_goal"),
+                "narrative_summary": bot.get("narrative_summary"),
+                "pending_reply_to": bot.get("pending_reply_to"),
+                "core_memories": bot.get("core_memories", []),
+                "recent_actions_synced": bot.get("recent_actions_synced", []),
             }
         for loc_name, loc_data in world["locations"].items():
             safe["locations"][loc_name] = {

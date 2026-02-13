@@ -539,7 +539,7 @@ function updateMapWeather(weather, hour) {
     const map = document.getElementById('map');
     map.classList.remove('day','night','sunset','dawn','rain','storm');
     
-    const wt = weather ? weather.type : '';
+    const wt = weather ? (weather.current || weather.type || '') : '';
     if (wt === '暴雨' || wt === '台风') map.classList.add('storm');
     else if (wt === '小雨') map.classList.add('rain');
     else if (hour >= 7 && hour < 17) map.classList.add('day');
@@ -567,7 +567,7 @@ function updateMapWeather(weather, hour) {
 
     // Weather overlay
     const wo = document.getElementById('mapWeather');
-    if (weather) wo.textContent = weather.type + ' ' + weather.desc;
+    if (weather) wo.textContent = (weather.current||weather.type||'') + ' ' + (weather.desc||'');
 }
 
 // ===== CARDS =====
@@ -828,13 +828,14 @@ async function fetchWorld() {
         if (worldState.weather) {
             const w = worldState.weather;
             const wIcons = {'晴天':'☀️','多云':'⛅','小雨':'🌧️','暴雨':'⛈️','台风':'🌀','闷热':'🥵','凉爽':'🍃'};
-            document.getElementById('weatherBadge').textContent = (wIcons[w.type]||'')+' '+w.type;
+            const wType = w.current || w.type || '';
+            document.getElementById('weatherBadge').textContent = (wIcons[wType]||'')+' '+wType;
         }
 
         // News ticker
         const topics = worldState.hot_topics || [];
         const news = worldState.news_feed || [];
-        const allNews = [...topics.map(t=>'🔥 '+t), ...news.map(n=>'📰 '+(n.title||n))];
+        const allNews = [...topics.map(t=>'🔥 '+(typeof t==='object'?t.title||t.headline||JSON.stringify(t):t)), ...news.map(n=>'📰 '+(typeof n==='object'?n.headline||n.title||JSON.stringify(n):n))];
         if (allNews.length > 0) {
             const inner = document.getElementById('newsTickerInner');
             const doubled = [...allNews, ...allNews];

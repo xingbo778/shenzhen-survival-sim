@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-深圳生存模拟 - Bot智能体 v8.3
+深圳生存模拟 - Bot智能体 v8.3.2
+v8.3.2 新增:
+- 认知失调驱动核心记忆 (期望与现实的差距触发深层记忆)
+- 无聊感增强 (行为多样性的心理学级别实现)
+- 心流状态 (投入感强的活动中获得额外满足感)
 v8.3 新增:
 - 状态同步总线 (每次心跳同步完整状态)
 - 反重复升级 (行动+内容摘要作为联合键)
@@ -121,6 +125,10 @@ inner_thoughts = []   # 内心独白历史
 recent_actions = []   # v8.3: 最近行动(行动+内容摘要，用于反重复)
 long_term_goal = None # v8.3: 长期目标
 narrative_summary = "" # v8.3: 内心叙事摘要
+
+# v8.3.2: 心流状态与无聊感
+flow_state = {"active": False, "activity": None, "streak": 0}  # 心流状态
+boredom_level = 0  # 无聊感 (0-100)
 
 def is_similar_memory(new_mem, existing_mems, threshold=0.6):
     """检测新记忆是否与已有记忆重复（字符重叠比）"""
@@ -261,6 +269,13 @@ def heartbeat():
         if len(recent_actions) > 8:
             recent_actions.pop(0)
 
+        # v8.3.2: 心流状态更新
+        update_flow_state(plan, result_str)
+        # v8.3.2: 无聊感更新
+        update_boredom(plan)
+        # v8.3.2: 认知失调检测
+        check_cognitive_dissonance(plan, result_str, my_state)
+
         # 6. 反思 (入睡时强制触发日终反思)
         is_going_to_sleep = "睡" in result_str or "躺下" in result_str
         reflect(world, my_state, thought, plan, result_str, recent_msgs, force=is_going_to_sleep)
@@ -364,6 +379,104 @@ def get_world_narrative():
 
 
 # ============================================================
+# v8.3.2: 心流状态、无聊感、认知失调
+# ============================================================
+def update_flow_state(plan, result_str):
+    """心流状态：当bot连续做同类有意义的活动时，进入心流，获得额外满足感"""
+    global flow_state
+    # 判断当前活动类型
+    activity_type = None
+    flow_keywords = {
+        "work": ["工作", "任务", "继续做", "写代码", "设计", "分析"],
+        "create": ["画画", "写", "创作", "弹吉他", "唱歌", "设计"],
+        "social": ["聊天", "说", "对话", "交流", "讨论"],
+        "explore": ["探索", "发现", "逃", "研究", "学习"],
+    }
+    for atype, keywords in flow_keywords.items():
+        if any(kw in plan for kw in keywords):
+            activity_type = atype
+            break
+
+    if activity_type and activity_type == flow_state.get("activity"):
+        flow_state["streak"] += 1
+        if flow_state["streak"] >= 2:
+            flow_state["active"] = True
+            log.info(f"[心流] 进入心流状态: {activity_type} (streak={flow_state['streak']})")
+    else:
+        if flow_state.get("active"):
+            log.info(f"[心流] 退出心流状态")
+        flow_state = {"active": False, "activity": activity_type, "streak": 1 if activity_type else 0}
+
+
+def update_boredom(plan):
+    """无聊感：重复行为增加无聊，新鲜行为降低无聊"""
+    global boredom_level
+    # 检查当前行动是否与最近行动重复
+    plan_short = plan[:15]
+    repeat_count = sum(1 for a in recent_actions[-5:] if a.startswith(plan_short))
+
+    if repeat_count >= 2:
+        boredom_level = min(100, boredom_level + 15)
+        log.info(f"[无聊感] 重复行为检测，无聊感上升到 {boredom_level}")
+    elif repeat_count == 1:
+        boredom_level = min(100, boredom_level + 5)
+    else:
+        # 新鲜行为降低无聊感
+        boredom_level = max(0, boredom_level - 10)
+
+    # 心流状态中无聊感不会上升
+    if flow_state.get("active"):
+        boredom_level = max(0, boredom_level - 5)
+
+
+def _boredom_hint():
+    """根据无聊感等级生成内在感受描述"""
+    if boredom_level >= 70:
+        return "(你感到一股强烈的无聊从心底涌上来。你渴望一些全新的体验，一些从未做过的事。你的身体在说：我受不了了，换点什么吧。)"
+    elif boredom_level >= 40:
+        return "(你觉得有点无聊，心里想着要不要做点不一样的事。)"
+    elif boredom_level >= 20:
+        return "(你回忆起这些事情，感觉还行。)"
+    return ""
+
+
+def _flow_hint():
+    """根据心流状态生成内在感受描述"""
+    if flow_state.get("active"):
+        activity_names = {"work": "工作", "create": "创作", "social": "聊天", "explore": "探索"}
+        act_name = activity_names.get(flow_state.get("activity"), "这件事")
+        return f"(你现在对{act_name}很投入，脑子转得很快，感觉时间过得很快。你不想被打断。)"
+    return ""
+
+
+def check_cognitive_dissonance(plan, result_str, my_state):
+    """认知失调：当期望与现实产生差距时，触发深层记忆形成"""
+    # 检测失败/意外情况
+    dissonance_triggers = ["失败", "钱不够", "被拒", "被驱逐", "没拍成", "无法", "不够"]
+    surprise_triggers = ["发现", "意外", "惊喜", "第一次", "从未"]
+
+    is_dissonance = any(t in result_str for t in dissonance_triggers)
+    is_surprise = any(t in result_str for t in surprise_triggers)
+
+    if is_dissonance or is_surprise:
+        tag = "认知失调" if is_dissonance else "意外发现"
+        # 这种时刻更容易形成核心记忆
+        dissonance_memory = f"[深刻体验] 我想{plan[:20]}，但结果是: {result_str[:40]}"
+        if not is_similar_memory(dissonance_memory, core_memories):
+            core_memories.append({
+                "summary": dissonance_memory,
+                "emotion": "negative" if is_dissonance else "surprise",
+                "tick": 0,  # 会在sync时更新
+                "time": "",
+                "tag": tag,
+            })
+            if len(core_memories) > 20:
+                core_memories.pop(0)
+            log.warning(f"[认知失调] ⭐ {dissonance_memory}")
+
+
+
+# ============================================================
 # 思考与决策
 # ============================================================
 def think_and_plan(world, my_state, recent_msgs, high_priority_msgs, moments_context, pending_reply=None):
@@ -385,7 +498,7 @@ def think_and_plan(world, my_state, recent_msgs, high_priority_msgs, moments_con
     nearby_npcs = loc_info.get("npcs", [])
     available_jobs = loc_info.get("jobs", [])
     events = world.get("events", [])[-3:]
-    events_text = "\n".join([f"- {e['event']}: {e['desc']}" for e in events]) if events else "暂无"
+    events_text = "\n".join([f"- {e.get('event', e.get('time',''))}: {e.get('desc','')}" for e in events]) if events else "暂无"
 
     # 情感关系（含印象）
     bonds_text = ""
@@ -622,7 +735,8 @@ NPC: {[n.get('name','?') for n in nearby_npcs]}
 
 === 你最近做过的事 ===
 {chr(10).join(recent_actions[-5:]) if recent_actions else '无'}
-(你回忆起这些事情，如果一直在做同样的事，你会觉得有点无聊，想换换花样)
+{_boredom_hint()}
+{_flow_hint()}
 
 请你以{persona['name']}的第一人称视角，先进行一段内心独白(2-4句话，体现你的性格、情绪和当前处境)，然后做出一个行动决策。
 
@@ -897,7 +1011,7 @@ if __name__ == "__main__":
     log.info(f"习惯: {persona.get('habits', '')}")
     if persona.get("family_info"):
         log.info(f"家庭: {persona['family_info']}")
-    log.info(f"v8.3能力: 同步总线/反重复升级/长期目标/双向对话")
+    log.info(f"v8.3.2能力: 同步总线/反重复升级/长期目标/双向对话/心流状态/无聊感/认知失调")
 
     # 尝试从世界引擎恢复内心状态
     try:
