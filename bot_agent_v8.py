@@ -269,10 +269,38 @@ def heartbeat():
             timeout=30
         )
         result = action_resp.json()
-        result_str = json.dumps(result.get("result", ""), ensure_ascii=False)
-        log.info(f"[结果] {result_str}")
-
-        action_record = f"[{world['time']['virtual_datetime']}] 我做了: {plan} -> {result_str}"
+        result_data = result.get("result", {})
+        result_str = json.dumps(result_data, ensure_ascii=False) if isinstance(result_data, dict) else str(result_data)
+        
+        # v10.0: 提取丰富的反馈信息
+        feedback_narrative = ""
+        feedback_text = ""
+        if isinstance(result_data, dict):
+            feedback_narrative = result_data.get("narrative", "")
+            feedback_text = result_data.get("feedback", "")
+            success = result_data.get("success", True)
+            world_change = result_data.get("world_change")
+            social_effects = result_data.get("social_effects", [])
+            
+            # 构建有意义的记忆条目
+            mem_parts = [f"[{world['time']['virtual_datetime']}] 我做了: {plan}"]
+            if feedback_narrative:
+                mem_parts.append(f"结果: {feedback_narrative[:80]}")
+            if not success:
+                mem_parts.append("(失败了)")
+            if world_change:
+                mem_parts.append(f"创造了: {world_change}")
+            if social_effects:
+                mem_parts.append(f"社交影响: {', '.join(social_effects[:2])}")
+            if feedback_text:
+                mem_parts.append(f"感受: {feedback_text[:40]}")
+            action_record = " | ".join(mem_parts)
+        else:
+            action_record = f"[{world['time']['virtual_datetime']}] 我做了: {plan} -> {result_str[:80]}"
+        
+        log.info(f"[结果] {feedback_narrative or result_str[:80]}")
+        if feedback_text:
+            log.info(f"[反馈] {feedback_text[:60]}")
         memory.append(action_record)
         # v8.3: 升级反重复 - 行动+内容摘要作为联合键
         action_digest = f"{plan[:15]}|{result_str[:15]}"
@@ -543,6 +571,55 @@ def think_and_plan(world, my_state, recent_msgs, high_priority_msgs, moments_con
     world_mods = world.get("world_modifications", [])[-5:]
     events_text = "\n".join([f"- {e.get('event', e.get('time',''))}: {e.get('desc','')}" for e in events]) if events else "暂无"
 
+    # v10.0: 获取上一次行动的反馈
+    last_feedback = my_state.get("last_action_feedback", {})
+    feedback_section = ""
+    if last_feedback:
+        fb_parts = []
+        if last_feedback.get("narrative"):
+            fb_parts.append(f"上次行动: {last_feedback['narrative'][:80]}")
+        if last_feedback.get("feedback"):
+            fb_parts.append(f"你感受到: {last_feedback['feedback'][:60]}")
+        if not last_feedback.get("success", True):
+            fb_parts.append("❗ 上次行动失败了！")
+        if last_feedback.get("world_change"):
+            fb_parts.append(f"你创造了: {last_feedback['world_change']}")
+        if fb_parts:
+            feedback_section = "\n".join(fb_parts)
+
+    # v10.0: 获取地点最近发生的事（其他人的行动侧面效果）
+    recent_loc_events = loc_info.get("recent_events", [])
+    loc_happenings = ""
+    if recent_loc_events:
+        # 只显示不是自己产生的事件
+        others_events = [e for e in recent_loc_events if e.get("source") != BOT_ID][-3:]
+        if others_events:
+            loc_happenings = "\n".join([f"- {e['event']}" for e in others_events])
+
+    # v10.1: 获取当前地点的活跃规则（bot可以感知到世界被改变的痕迹）
+    rules_section = ""
+    try:
+        rules_resp = requests.get(f"{ENGINE}/rules/{my_state.get('location', '')}", timeout=3)
+        if rules_resp.ok:
+            loc_rules = rules_resp.json().get("rules", [])
+            if loc_rules:
+                rules_section = "\n".join(loc_rules[:5])
+    except:
+        pass
+
+    # v10.1: 获取吸引信号（其他地点的规则在吸引你）
+    attraction_section = ""
+    attraction_signals = my_state.get("attraction_signals", [])
+    if attraction_signals:
+        att_lines = [f"- 来自[{s['location']}]的吸引: {s['reason']}" for s in attraction_signals[-3:]]
+        attraction_section = "\n".join(att_lines)
+
+    # v10.1: 获取上次行动创建的规则反馈
+    if last_feedback.get("rules_created"):
+        rules_created = last_feedback["rules_created"]
+        rc_text = ", ".join([f"{r['name']}" for r in rules_created])
+        feedback_section += f"\n你的行动改变了世界的运行规则! 新规则: {rc_text}"
+
     # 情感关系（含印象）
     bonds_text = ""
     if emotional_bonds:
@@ -776,6 +853,17 @@ NPC: {[n.get('name','?') for n in nearby_npcs]}
 === 城市传说 ===
 {chr(10).join([f'- 听说{l.get("original_name","?")}曾经: {l.get("content","")[:50]}' for l in urban_legends]) if urban_legends else '还没有听到什么传说'}
 
+=== 上次行动的结果 ===
+{feedback_section if feedback_section else '这是你今天的第一个行动'}
+
+=== 这里最近发生的事 ===
+{loc_happenings if loc_happenings else '周围很安静，没什么特别的'}
+
+=== 这个地方的“规则”（别人创造的、正在运行的东西） ===
+{rules_section if rules_section else '这里没有什么特别的设施或活动'}
+
+{f'=== 你感受到的吸引 ==={chr(10)}{attraction_section}' if attraction_section else ''}
+
 === 近期记忆 ===
 {recent_mem}
 
@@ -923,7 +1011,9 @@ def reflect(world, my_state, thought, plan, result, recent_msgs, force=False):
 
 请输出一个JSON对象，包含以下字段(只输出需要更新的字段，不需要更新的留空或不写):
 
-{{  "values_update": "如果经历了重大事件导致价值观微调，写出新的价值观描述(保持原有风格，只做微调)。如果不需要变化，写null",
+{{  "action_evaluation": "用一句话评价你最近的行动效果如何，它是否帮助你接近目标？你学到了什么？如果失败了，下次应该怎么做？",
+  "strategy_insight": "基于最近的经历，你对生存策略有什么新的领悟？(如'应该多和人合作'、'这个地方赚钱机会多'、'需要先存钱再创业')。如果没有新领悟，写null",
+  "values_update": "如果经历了重大事件导致价值观微调，写出新的价值观描述(保持原有风格，只做微调)。如果不需要变化，写null",
   "new_core_memory": "如果最近发生了值得永远记住的重要事件，用一句话总结。如果没有，写null",
   "memory_emotion": "这段记忆的情感标签: positive/negative/neutral",
   "emotion_update": {{
@@ -961,6 +1051,17 @@ def reflect(world, my_state, thought, plan, result, recent_msgs, force=False):
         if json_match:
             raw = json_match.group(0)
         updates = json.loads(raw)
+
+        # v10.0: 行动评估和策略学习
+        action_eval = updates.get("action_evaluation")
+        if action_eval and action_eval != "null":
+            log.warning(f"[行动评估] {action_eval[:60]}")
+            memory.append(f"[反思] {action_eval[:80]}")
+
+        strategy = updates.get("strategy_insight")
+        if strategy and strategy != "null":
+            log.warning(f"[策略领悟] {strategy[:60]}")
+            memory.append(f"[领悟] {strategy[:60]}")
 
         # 更新价值观
         if updates.get("values_update") and updates["values_update"] != "null":

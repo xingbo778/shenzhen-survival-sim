@@ -29,6 +29,7 @@ from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 from openai import OpenAI
+from world_rules_engine import tick_rules, generate_rules_from_action, get_rules_summary, get_attraction_signals
 
 # ============================================================
 # 日志
@@ -80,7 +81,7 @@ def grok_generate(prompt: str, save_path: str) -> dict:
 # ============================================================
 
 # --- 寿命系统 (HP→不可逆寿命) ---
-AGING_BASE = 0.2               # 每tick基础衰老 (100寿命 / 0.2 = 500tick ≈ 21天)
+AGING_BASE = 0.5               # 每tick基础衰老 (100寿命 / 0.5 = 200tick ≈ 加速模式约50分钟)
 AGING_HUNGER_MULT = 5.0        # 饥饿时衰老加速倍率
 AGING_OVERWORK_MULT = 3.0      # 过劳时衰老加速倍率
 AGING_SICK_MULT = 2.0          # 生病时衰老加速倍率
@@ -381,6 +382,8 @@ world = {
     "generation_count": 0,       # 当前代数
     "graveyard": [],             # 墓地 (死亡bot的记录)
     "reputation_board": {},      # 全局声望榜 {bot_id: {score, tags, deeds}}
+    # === v10.1: 世界规则引擎 ===
+    "active_rules": [],             # 活跃的世界运行规则
 }
 
 
@@ -478,6 +481,7 @@ def init_world():
             world["generation_count"] = snap.get("generation_count", 0)
             world["graveyard"] = snap.get("graveyard", [])
             world["reputation_board"] = snap.get("reputation_board", {})
+            world["active_rules"] = snap.get("active_rules", [])
 
             for bid, bdata in snap.get("bots", {}).items():
                 bot = create_bot(bid)
@@ -531,6 +535,87 @@ def init_world():
 
     # 初始新闻
     inject_news()
+
+    # === v10.1: 注入种子规则（打破冷启动） ===
+    from world_rules_engine import create_rule
+    seed_rules = [
+        create_rule(
+            name="早餐摒老李的炒粉摒",
+            creator_id="npc_vendor", creator_name="早餐摒老李",
+            location="宝安城中村",
+            trigger="every_tick",
+            condition={"and": [{"time_between": [6, 22]}, {"random": 0.15}]},
+            effects=[
+                {"type": "modify_bot_attr", "attr": "satiety", "delta": 35, "cost_money": 12},
+                {"type": "modify_bot_emotion", "emotion": "happiness", "delta": 3},
+                {"type": "generate_income", "target": "creator", "amount": 0},
+                {"type": "narrative", "text": "老李的炒粉摒飘来阵阵香气，有人忍不住停下脚步买了一份"},
+            ],
+            description="宝安城中村的早餐摒老李每天卖炒粉，香气四溢，经过的人忍不住买一份",
+            durability=500, decay_rate=0.02,
+        ),
+        create_rule(
+            name="华强北地摒经济",
+            creator_id="system", creator_name="城市系统",
+            location="华强北",
+            trigger="every_tick",
+            condition={"and": [{"time_between": [9, 21]}, {"random": 0.1}]},
+            effects=[
+                {"type": "modify_bot_emotion", "emotion": "vanity", "delta": 2},
+                {"type": "narrative", "text": "华强北的商贩们在大声吾喝，各种电子产品的叫卖声此起彼伏"},
+            ],
+            description="华强北的地摒经济永远充满活力，各种商品交易和小生意在这里不断发生",
+            durability=999, decay_rate=0.005,
+        ),
+        create_rule(
+            name="深圳湾公园的宁静",
+            creator_id="system", creator_name="城市系统",
+            location="深圳湾公园",
+            trigger="every_tick",
+            condition={"random": 0.2},
+            effects=[
+                {"type": "modify_bot_attr", "attr": "energy", "delta": 5},
+                {"type": "modify_bot_emotion", "emotion": "happiness", "delta": 5},
+                {"type": "modify_bot_emotion", "emotion": "anxiety", "delta": -3},
+                {"type": "attract_bot", "chance": 0.05, "location": "深圳湾公园", "message": "海风徐徐，公园里传来宁静的气息"},
+            ],
+            description="深圳湾公园的海风和绿地让人心旷神怡，恢复精力和快乐",
+            durability=999, decay_rate=0.005,
+        ),
+        create_rule(
+            name="福田CBD的压力",
+            creator_id="system", creator_name="城市系统",
+            location="福田CBD",
+            trigger="every_tick",
+            condition={"and": [{"time_between": [9, 18]}, {"random": 0.15}]},
+            effects=[
+                {"type": "modify_bot_emotion", "emotion": "anxiety", "delta": 3},
+                {"type": "modify_bot_emotion", "emotion": "vanity", "delta": 2},
+                {"type": "narrative", "text": "周围的白领们行色匹匹，每个人都在为生活拼命"},
+            ],
+            description="福田CBD的快节奏让人焦虑但也刺激野心",
+            durability=999, decay_rate=0.005,
+        ),
+        create_rule(
+            name="东门老街的日结工招募",
+            creator_id="npc_boss", creator_name="包工头老陈",
+            location="东门老街",
+            trigger="every_tick",
+            condition={"and": [{"time_between": [7, 17]}, {"random": 0.1}]},
+            effects=[
+                {"type": "modify_bot_attr", "attr": "money", "delta": 80, "cost_money": 0},
+                {"type": "modify_bot_attr", "attr": "energy", "delta": -30},
+                {"type": "narrative", "text": "包工头老陈在招日结工，干一天能拿80块"},
+            ],
+            description="东门老街的包工头老陈每天招日结工，辛苦但能赚钱",
+            durability=800, decay_rate=0.01,
+        ),
+    ]
+    for sr in seed_rules:
+        sr["created_tick"] = 0
+    world["active_rules"] = seed_rules
+    log.info(f"v10.1: 注入{len(seed_rules)}条种子规则")
+
     log.info("全新世界初始化完成")
 
 
@@ -891,6 +976,20 @@ def world_tick():
                         world["locations"]["东门老街"]["bots"].append(bid2)
                     log.warning(f"{bid2} 交不起房租，被驱逐到东门老街!")
 
+            # v9.0: 年龄增长 (每虚拟1天 = 1岁)
+            for bid_age, bot_age in world["bots"].items():
+                if bot_age["status"] != "alive":
+                    continue
+                bot_age["age"] = bot_age.get("age", 25) + 1
+                # 老年人衰老加速
+                if bot_age["age"] >= 70:
+                    bot_age["hp"] = max(0, bot_age["hp"] - 2.0)  # 老年额外扣HP
+                    log.info(f"{bid_age} {bot_age['name']} 已{bot_age['age']}岁，衰老加速")
+                elif bot_age["age"] >= 55:
+                    bot_age["hp"] = max(0, bot_age["hp"] - 0.5)  # 中年额外扣HP
+                if t["tick"] % 24 == 0:  # 每24tick(虚拟1天)记录一次
+                    log.info(f"🎂 {bot_age['name']} 现在{bot_age['age']}岁 (HP:{bot_age['hp']:.1f})")
+
         # v8.3.2: 动态经济 - 每日6:00食物价格自然回落
         if vh == 6:
             dp = world.get("food_prices", {})
@@ -952,10 +1051,20 @@ def world_tick():
                 elif interactions >= 5:
                     npc["attitude"] = "开始认识常客"
 
+        # === v10.1: 执行世界规则引擎 ===
+        try:
+            rule_narratives = tick_rules(world)
+            if rule_narratives:
+                for rn in rule_narratives[:5]:
+                    log.info(f"[RULES] {rn}")
+        except Exception as e:
+            log.error(f"[RULES] tick_rules失败: {e}")
+
         # 清理过期效果
         world["active_effects"] = [e for e in world["active_effects"] if e["expires_tick"] > t["tick"]]
 
-        log.info(f'存活Bot数: {alive_count}/{len(world["bots"])}')
+        active_rule_count = sum(1 for r in world.get('active_rules', []) if r.get('active', True))
+        log.info(f'存活Bot数: {alive_count}/{len(world["bots"])} | 活跃规则: {active_rule_count}')
 
 
 # distribute_hp 已移除 - 寿命不可逆
@@ -2594,6 +2703,477 @@ def interpret_free_action(bot_id, bot, desc):
 
 
 # ============================================================
+# v10.0: Generic 工具系统 + 反馈循环
+# ============================================================
+
+def execute_generic(bot_id, tool_call):
+    """v10.0 核心：执行 generic 工具调用，返回丰富的后果反馈。
+    5个工具: use_resource / interact / move / create / express
+    所有后果由 LLM 判断，不再硬编码。"""
+    bot = world["bots"][bot_id]
+    tool = tool_call.get("tool", "")
+    args = tool_call.get("args", {})
+    desc = tool_call.get("desc", "")
+    loc = bot["location"]
+    loc_info = world["locations"].get(loc, {})
+
+    # 构建世界上下文给 LLM
+    nearby_bots_info = []
+    for nb in loc_info.get("bots", []):
+        if nb != bot_id:
+            ob = world["bots"].get(nb, {})
+            nearby_bots_info.append(f"{ob.get('name','?')}({nb}): {ob.get('current_activity','闲着')}")
+
+    existing_creations = [m for m in world.get("world_modifications", []) if m.get("location") == loc]
+    creations_text = ", ".join([f"{c['name']}(by {c.get('creator_name','?')})" for c in existing_creations[:5]]) if existing_creations else "无"
+
+    npcs_text = ", ".join([n.get("name","?") for n in loc_info.get("npcs", [])]) if loc_info.get("npcs") else "无"
+
+    context = f"""角色: {bot.get('name', bot_id)} ({bot.get('age','?')}岁{bot.get('gender','?')})
+性格: {bot.get('personality','')[:60]}
+地点: {loc}
+金钱: {bot['money']}元 | 能量: {bot['energy']}/100 | 饱腹: {bot['satiety']}/100 | HP: {bot['hp']:.0f}/100
+技能: {json.dumps(bot.get('skills',{}), ensure_ascii=False)}
+物品: {bot.get('inventory', [])}
+附近的人: {chr(10).join(nearby_bots_info) if nearby_bots_info else '无'}
+NPC: {npcs_text}
+这里已有的创造物: {creations_text}
+天气: {world['weather'].get('condition','晴天')}
+时间: {world['time']['virtual_datetime']}"""
+
+    consequence_prompt = f"""你是深圳生存模拟的世界引擎。一个角色使用了工具，请判断后果。
+
+{context}
+
+== 工具调用 ==
+工具: {tool}
+参数: {json.dumps(args, ensure_ascii=False)}
+描述: {desc}
+
+请输出一个JSON，判断这个行动在真实世界中会产生什么后果：
+
+{{
+  "narrative": "2-3句生动的第三人称叙述，描述发生了什么，要具体、有画面感",
+  "success": true或false,
+  "money_delta": 金钱变化(整数，花钱为负，赚钱为正，要合理),
+  "energy_delta": 能量变化(通常-2到-10，休息为正),
+  "satiety_delta": 饱腹变化(吃东西为正，否则0),
+  "happiness_delta": 快乐变化(-10到+10),
+  "skill_up": "提升的技能名(creative/tech/social/physical)或null",
+  "world_change": {{
+    "type": "new_entity/modify_entity/destroy_entity/reputation/information/null",
+    "name": "创造物/变化的名称",
+    "description": "这个变化的描述",
+    "permanent": true或false,
+    "cost_money": 创建花费(0如果不花钱),
+    "cost_energy": 创建消耗能量
+  }} 或 null,
+  "social_effects": [
+    {{
+      "target": "受影响的人的bot_id或名字",
+      "effect": "对这个人产生了什么影响",
+      "warmth_delta": 关系温度变化(-5到+5)
+    }}
+  ],
+  "side_effects": ["附近的人能观察到的现象(1-2条)"],
+  "feedback_to_actor": "给行动者的直接反馈(他能看到/听到/感受到什么)"
+}}
+
+规则：
+- 要符合现实逻辑，不要魔法
+- 花钱的事情必须检查够不够钱(当前{bot['money']}元)，不够就失败
+- 能量不够(当前{bot['energy']})也会影响结果
+- 创业/开店至少需要100-500元，不能空手套白狼
+- 和人互动时，对方的反应要符合对方的性格和当前状态
+- world_change只在真正产生持久影响时才填(画画、开店、种树、建东西等)，普通聊天/吃饭不算
+- social_effects只在有社交互动时才填
+- 只输出JSON"""
+
+    try:
+        resp = client.chat.completions.create(
+            model="gpt-4.1-mini",
+            messages=[{"role": "user", "content": consequence_prompt}],
+            temperature=0.7, max_tokens=600,
+        )
+        raw = resp.choices[0].message.content.strip()
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+        json_match = re.search(r'\{[\s\S]*\}', raw)
+        if json_match:
+            raw = json_match.group(0)
+        raw = re.sub(r',\s*}', '}', raw)
+        raw = re.sub(r',\s*]', ']', raw)
+        result = json.loads(raw)
+    except Exception as e:
+        log.error(f"[v10] execute_generic LLM失败: {e}")
+        result = {
+            "narrative": f"{bot.get('name', bot_id)}尝试{desc}，但没什么特别的事发生。",
+            "success": True, "money_delta": 0, "energy_delta": -3,
+            "satiety_delta": 0, "happiness_delta": 0,
+            "world_change": None, "social_effects": [], "side_effects": [],
+            "feedback_to_actor": "一切如常。"
+        }
+
+    # === 应用后果 ===
+    narrative = result.get("narrative", desc)
+
+    # 资源变化
+    money_d = int(result.get("money_delta", 0))
+    energy_d = int(result.get("energy_delta", -3))
+    satiety_d = int(result.get("satiety_delta", 0))
+    happiness_d = int(result.get("happiness_delta", 0))
+
+    bot["money"] = max(0, bot["money"] + money_d)
+    bot["energy"] = max(0, min(100, bot["energy"] + energy_d))
+    bot["satiety"] = max(0, min(100, bot["satiety"] + satiety_d))
+    emotions = bot.get("emotions", {})
+    emotions["happiness"] = max(0, min(100, emotions.get("happiness", 50) + happiness_d))
+    bot["emotions"] = emotions
+
+    # 技能提升
+    skill = result.get("skill_up")
+    if skill and skill in bot.get("skills", {}):
+        bot["skills"][skill] = min(100, bot["skills"][skill] + 1)
+
+    # === 世界改变 ===
+    wc = result.get("world_change")
+    if wc and wc.get("type") and wc["type"] != "null":
+        cost_m = int(wc.get("cost_money", 0))
+        cost_e = int(wc.get("cost_energy", 0))
+
+        # 检查资源是否足够
+        if bot["money"] >= cost_m and bot["energy"] >= cost_e:
+            bot["money"] -= cost_m
+            bot["energy"] = max(0, bot["energy"] - cost_e)
+
+            if wc.get("permanent", False):
+                mod = {
+                    "name": wc.get("name", "未知创造"),
+                    "description": wc.get("description", ""),
+                    "type": wc["type"],
+                    "creator": bot_id,
+                    "creator_name": bot.get("name", bot_id),
+                    "location": loc,
+                    "tick": world["time"]["tick"],
+                    "time": world["time"]["virtual_datetime"],
+                }
+                world["world_modifications"].append(mod)
+                log.warning(f"[v10 WORLD_CHANGE] {bot.get('name',bot_id)} 创造了 [{wc['name']}] @ {loc}")
+
+                # 声望奖励
+                rep = bot.get("reputation", {"score": 0, "tags": []})
+                rep["score"] = rep.get("score", 0) + 3
+                bot["reputation"] = rep
+
+                # 地点公共记忆
+                add_public_memory(loc, f"{bot.get('name',bot_id)}创造了{wc['name']}: {wc.get('description','')[:40]}", bot_id, "creation")
+
+            elif wc["type"] == "reputation":
+                rep = bot.get("reputation", {"score": 0, "tags": []})
+                rep["score"] = rep.get("score", 0) + 1
+                bot["reputation"] = rep
+
+            elif wc["type"] == "information":
+                # 信息传播——添加到地点记忆
+                add_public_memory(loc, f"{bot.get('name',bot_id)}: {wc.get('description','')[:50]}", bot_id, "information")
+
+            narrative += f" [世界变化: {wc.get('name','')}]"
+        else:
+            narrative += f" (想创造{wc.get('name','')}, 但资源不够)"
+
+    # === 社交效果 ===
+    social_fx = result.get("social_effects", [])
+    for fx in social_fx:
+        target_id = fx.get("target", "")
+        warmth_d = int(fx.get("warmth_delta", 0))
+        effect_desc = fx.get("effect", "")
+
+        # 尝试匹配 target 到 bot_id
+        resolved_target = None
+        for bid, bdata in world["bots"].items():
+            if bid == target_id or bdata.get("name") == target_id:
+                resolved_target = bid
+                break
+
+        if resolved_target and resolved_target != bot_id:
+            # 更新关系
+            rels = bot.get("relationships", {})
+            if resolved_target not in rels:
+                rels[resolved_target] = {"label": "认识的人", "warmth": 0}
+            rels[resolved_target]["warmth"] = max(-10, min(10, rels[resolved_target].get("warmth", 0) + warmth_d))
+            bot["relationships"] = rels
+
+            # 对方也感知到
+            target_bot = world["bots"].get(resolved_target, {})
+            target_rels = target_bot.get("relationships", {})
+            if bot_id not in target_rels:
+                target_rels[bot_id] = {"label": "认识的人", "warmth": 0}
+            # 对方的感受是行动者的一半
+            target_rels[bot_id]["warmth"] = max(-10, min(10, target_rels[bot_id].get("warmth", 0) + warmth_d // 2))
+            target_bot["relationships"] = target_rels
+
+            log.info(f"[v10 SOCIAL] {bot.get('name',bot_id)}->{world['bots'].get(resolved_target,{}).get('name','?')}: {effect_desc} (warmth {warmth_d:+d})")
+
+            # 记录到地点记忆（如果是显著互动）
+            if abs(warmth_d) >= 3:
+                add_public_memory(loc, f"{bot.get('name',bot_id)}和{target_bot.get('name','?')}: {effect_desc[:30]}", bot_id, "social")
+
+    # === 侧面效果（供其他bot感知） ===
+    side_effects = result.get("side_effects", [])
+    if side_effects:
+        # 存储为地点的临时事件，其他bot下次heartbeat时能看到
+        if "recent_events" not in loc_info:
+            loc_info["recent_events"] = []
+        for se in side_effects[:3]:
+            loc_info["recent_events"].append({
+                "event": se,
+                "source": bot_id,
+                "tick": world["time"]["tick"]
+            })
+        # 只保留最近10条
+        loc_info["recent_events"] = loc_info["recent_events"][-10:]
+
+    # === 构建反馈结果 ===
+    feedback = {
+        "narrative": narrative,
+        "success": result.get("success", True),
+        "feedback": result.get("feedback_to_actor", ""),
+        "resource_changes": {
+            "money": money_d - int(wc.get("cost_money", 0) if wc and wc.get("type") != "null" else 0),
+            "energy": energy_d - int(wc.get("cost_energy", 0) if wc and wc.get("type") != "null" else 0),
+            "satiety": satiety_d,
+            "happiness": happiness_d,
+        },
+        "world_change": wc.get("name") if wc and wc.get("type") != "null" else None,
+        "social_effects": [f"{fx.get('target','?')}: {fx.get('effect','')}" for fx in social_fx],
+    }
+
+    log.info(f"[v10] {bot.get('name',bot_id)} | {tool}({json.dumps(args, ensure_ascii=False)[:60]}) -> {narrative[:80]}")
+
+    return feedback
+
+
+def process_action_v10(bot_id, plan):
+    """v10.0: 新的行动处理入口。
+    接受 bot 的自然语言计划，用 LLM 转换为 generic 工具调用，然后执行。
+    如果无法解析为工具调用，fallback 到旧的 process_action。"""
+    bot = world["bots"][bot_id]
+    loc = bot["location"]
+    loc_info = world["locations"].get(loc, {})
+
+    # 硬编码起床
+    if plan.strip() in ("起床", "醒来", "起来"):
+        action = {"category": "survive", "type": "wake_up", "desc": plan}
+        result = execute(bot_id, action)
+        bot["action_log"].append({
+            "tick": world["time"]["tick"],
+            "time": world["time"]["virtual_datetime"],
+            "plan": plan, "action": action, "result": result
+        })
+        bot["current_activity"] = "刚刚醒来"
+        return {"action": action, "result": result}
+
+    # 硬编码睡觉
+    if any(kw in plan for kw in ["睡觉", "睡了", "入睡", "躺下睡"]):
+        action = {"category": "survive", "type": "sleep", "desc": plan}
+        result = execute(bot_id, action)
+        bot["action_log"].append({
+            "tick": world["time"]["tick"],
+            "time": world["time"]["virtual_datetime"],
+            "plan": plan, "action": action, "result": result
+        })
+        bot["current_activity"] = "睡觉中"
+        return {"action": action, "result": result}
+
+    # 用 LLM 将自然语言转为 generic 工具调用
+    nearby_bots = [b for b in loc_info.get("bots",[]) if b != bot_id]
+    nearby_info = []
+    for nb in nearby_bots[:5]:
+        ob = world["bots"].get(nb, {})
+        nearby_info.append(f"{nb}({ob.get('name','?')})")
+
+    all_locs = list(LOCATIONS.keys())
+    existing_things = [m["name"] for m in world.get("world_modifications", []) if m.get("location") == loc]
+
+    tool_prompt = f"""你是一个JSON转换器。将用户的自然语言计划转为一个工具调用JSON。只输出JSON。
+
+## 上下文
+- 角色: {bot.get('name', bot_id)} (钱:{bot['money']}元, 能量:{bot['energy']}, 饱腹:{bot['satiety']})
+- 地点: {loc}
+- 附近的人: {nearby_info if nearby_info else '无'}
+- NPC: {[n['name'] for n in loc_info.get('npcs',[])]}
+- 所有地点: {all_locs}
+- 这里已有的东西: {existing_things if existing_things else '无'}
+
+## 5个工具
+
+### use_resource - 消耗资源做任何事
+用途: 吃饭、买东西、工作赚钱、学习、锻炼、休息、娱乐...
+{{"tool":"use_resource", "args":{{"resource":"money/energy/item", "amount":数字, "purpose":"做什么"}}, "desc":"原始描述"}}
+
+### interact - 与人/NPC/物品/设施交互
+用途: 聊天、交易、合作、争吵、求助、使用设施...
+{{"tool":"interact", "args":{{"target":"对象名或bot_id", "manner":"friendly/hostile/business/romantic/casual", "content":"具体内容"}}, "desc":"原始描述"}}
+
+### move - 移动到其他地点
+{{"tool":"move", "args":{{"destination":"地点名", "mode":"walk/bus/taxi"}}, "desc":"原始描述"}}
+目的地必须是: {all_locs}
+
+### create - 创造/建造/改变世界中的东西
+用途: 开店、摆摊、画画、种树、写歌、组织活动、传播消息...
+{{"tool":"create", "args":{{"what":"创造什么", "where":"{loc}", "using":"需要的资源描述"}}, "desc":"原始描述"}}
+
+### express - 表达/输出信息
+用途: 发朋友圈、自言自语、大声呼喊、唱歌、演讲...
+{{"tool":"express", "args":{{"channel":"朋友圈/自言自语/大声说/唱歌/表演", "content":"内容"}}, "desc":"原始描述"}}
+
+## 规则
+- 只输出一个JSON
+- 如果计划包含多个动作，只取最主要的一个
+- 吃饭/买东西/工作/休息/学习/锻炼 -> use_resource
+- 和人说话/交易/合作 -> interact
+- 去其他地方 -> move
+- 创造新东西/永久改变环境 -> create
+- 发朋友圈/唱歌/喊话 -> express
+- desc字段完整保留原始计划
+
+## 计划
+"{plan}"
+
+## JSON"""
+
+    try:
+        resp = client.chat.completions.create(
+            model="gpt-4.1-nano",
+            messages=[{"role": "user", "content": tool_prompt}],
+            temperature=0.0, max_tokens=200,
+        )
+        raw = resp.choices[0].message.content.strip()
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+        start = raw.find("{")
+        if start >= 0:
+            depth = 0
+            end = start
+            for i in range(start, len(raw)):
+                if raw[i] == "{":
+                    depth += 1
+                elif raw[i] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        end = i + 1
+                        break
+            raw = raw[start:end]
+        tool_call = json.loads(raw)
+    except Exception as e:
+        log.error(f"[v10] LLM工具解析失败: {e}, fallback到旧逻辑")
+        return process_action(bot_id, plan)
+
+    tool_name = tool_call.get("tool", "")
+
+    # move 特殊处理（直接执行，不需要LLM判断后果）
+    if tool_name == "move":
+        dest = tool_call.get("args", {}).get("destination", "")
+        mode = tool_call.get("args", {}).get("mode", "walk")
+        if dest == bot["location"]:
+            # 同地移动 = 就地探索，转为 generic 执行
+            tool_call["tool"] = "use_resource"
+            tool_call["args"] = {"resource": "energy", "amount": 3, "purpose": f"在{loc}附近闲逛探索"}
+            tool_call["desc"] = f"在{loc}附近闲逛探索"
+            feedback = execute_generic(bot_id, tool_call)
+        elif dest in LOCATIONS:
+            old_loc = bot["location"]
+            if old_loc in world["locations"] and bot_id in world["locations"][old_loc]["bots"]:
+                world["locations"][old_loc]["bots"].remove(bot_id)
+            bot["location"] = dest
+            if bot_id not in world["locations"][dest]["bots"]:
+                world["locations"][dest]["bots"].append(bot_id)
+            cost = {"walk": 0, "bus": 3, "taxi": 15}.get(mode, 0)
+            bot["money"] = max(0, bot["money"] - cost)
+            bot["energy"] = max(0, bot["energy"] - 5)
+            narrative = f"{bot.get('name',bot_id)}从{old_loc}{'走路' if mode=='walk' else '坐'+mode}到了{dest}"
+            if cost > 0:
+                narrative += f"(花了{cost}元)"
+            log.info(f"[v10] {bot.get('name',bot_id)} 移动: {old_loc} -> {dest} ({mode})")
+            feedback = {"narrative": narrative, "success": True, "feedback": f"你到了{dest}"}
+        else:
+            feedback = {"narrative": f"找不到{dest}这个地方", "success": False, "feedback": "目的地不存在"}
+
+    # express 中的朋友圈特殊处理
+    elif tool_name == "express" and tool_call.get("args", {}).get("channel") == "朋友圈":
+        content = tool_call.get("args", {}).get("content", "")
+        moment = {
+            "author": bot_id,
+            "author_name": bot.get("name", bot_id),
+            "content": content,
+            "time": world["time"]["virtual_datetime"],
+            "tick": world["time"]["tick"],
+            "likes": [],
+            "comments": [],
+        }
+        world["moments"].append(moment)
+        if len(world["moments"]) > 100:
+            world["moments"] = world["moments"][-80:]
+        log.info(f"[v10] {bot.get('name',bot_id)} 发朋友圈: {content[:40]}")
+        feedback = {"narrative": f"{bot.get('name',bot_id)}发了一条朋友圈: {content[:30]}...", "success": True, "feedback": "朋友圈发送成功"}
+
+    else:
+        # 所有其他工具调用走 generic 执行引擎
+        feedback = execute_generic(bot_id, tool_call)
+
+    # 记录行动日志
+    bot["action_log"].append({
+        "tick": world["time"]["tick"],
+        "time": world["time"]["virtual_datetime"],
+        "plan": plan,
+        "tool_call": tool_call,
+        "result": feedback,
+    })
+    if len(bot["action_log"]) > 50:
+        bot["action_log"] = bot["action_log"][-30:]
+
+    # 更新当前活动
+    bot["current_activity"] = (tool_call.get("desc", "") or plan)[:40]
+
+    # 存储反馈供 bot 下次感知
+    bot["last_action_feedback"] = {
+        "plan": plan,
+        "narrative": feedback.get("narrative", ""),
+        "feedback": feedback.get("feedback", ""),
+        "success": feedback.get("success", True),
+        "world_change": feedback.get("world_change"),
+        "social_effects": feedback.get("social_effects", []),
+    }
+
+    # === v10.1: 判断是否应该产生新的世界运行规则 ===
+    log.info(f"[RULES-DEBUG] 准备判断规则: {bot.get('name',bot_id)} @ {loc}, success={feedback.get('success', True)}, plan={plan[:50]}")
+    if feedback.get("success", True):
+        try:
+            new_rules = generate_rules_from_action(
+                world, bot_id, bot.get("name", bot_id), loc,
+                plan, feedback.get("narrative", ""), client
+            )
+            log.info(f"[RULES-DEBUG] 规则判断结果: {len(new_rules) if new_rules else 0}条")
+            if new_rules:
+                for nr in new_rules:
+                    world["active_rules"].append(nr)
+                    log.warning(f"[RULES] 新规则注入! [{nr['name']}] by {bot.get('name',bot_id)} @ {loc}: {nr['description'][:60]}")
+                    # 同时记录到反馈中，让bot知道自己改变了世界
+                    bot["last_action_feedback"]["rules_created"] = [
+                        {"name": nr["name"], "desc": nr["description"]} for nr in new_rules
+                    ]
+                    # 声望奖励
+                    rep = bot.get("reputation", {"score": 0, "tags": [], "deeds": []})
+                    rep["score"] = rep.get("score", 0) + 5
+                    rep["deeds"].append(f"创建规则[{nr['name']}]")
+                    bot["reputation"] = rep
+        except Exception as e:
+            log.error(f"[RULES] generate_rules_from_action失败: {e}")
+
+    return {"action": tool_call, "result": feedback}
+
+
+# ============================================================
 # API 端点
 # ============================================================
 @app.get("/world")
@@ -2637,6 +3217,9 @@ def get_world():
                 "created_things": bot.get("created_things", []),
                 "generation": bot.get("generation", 0),
                 "inherited_from": bot.get("inherited_from"),
+                # v10.0
+                "last_action_feedback": bot.get("last_action_feedback", {}),
+                "action_log": bot.get("action_log", [])[-10:],
             }
         for loc_name, loc_data in world["locations"].items():
             safe["locations"][loc_name] = {
@@ -2656,6 +3239,12 @@ def get_world():
         safe["graveyard"] = world.get("graveyard", [])
         safe["generation_count"] = world.get("generation_count", 0)
         safe["reputation_board"] = world.get("reputation_board", {})
+        # v10.1: 保存活跃规则
+        rules_to_save = []
+        for r in world.get("active_rules", []):
+            r_copy = {k: v for k, v in r.items() if k != "_triggered_bots"}
+            rules_to_save.append(r_copy)
+        safe["active_rules"] = rules_to_save[-50:]
         return safe
 
 
@@ -2716,7 +3305,7 @@ async def bot_action(bot_id: str, request: Request):
         bot = world["bots"].get(bot_id)
         if not bot or bot["status"] != "alive":
             return {"error": "bot not available"}
-        result = process_action(bot_id, plan)
+        result = process_action_v10(bot_id, plan)
     return result
 
 
@@ -2860,7 +3449,54 @@ def get_evolution_data():
             "location_vibes": {loc: data.get("vibe", "普通") for loc, data in world["locations"].items()},
             "location_memories": {loc: data.get("public_memory", [])[-10:] for loc, data in world["locations"].items()},
             "location_modifications": {loc: data.get("modifications", []) for loc, data in world["locations"].items()},
+            # v10.1: 规则引擎数据
+            "active_rules": [
+                {
+                    "id": r["id"],
+                    "name": r["name"],
+                    "creator_name": r.get("creator_name", "?"),
+                    "location": r.get("location"),
+                    "description": r.get("description", ""),
+                    "durability": round(r.get("durability", 0), 1),
+                    "execution_count": r.get("execution_count", 0),
+                    "active": r.get("active", True),
+                }
+                for r in world.get("active_rules", [])
+            ],
+            "active_rules_count": sum(1 for r in world.get("active_rules", []) if r.get("active", True)),
         }
+
+
+@app.get("/rules")
+def get_rules():
+    """v10.1: 获取所有世界规则"""
+    with lock:
+        rules = []
+        for r in world.get("active_rules", []):
+            rules.append({
+                "id": r["id"],
+                "name": r["name"],
+                "creator": r.get("creator", ""),
+                "creator_name": r.get("creator_name", "?"),
+                "location": r.get("location"),
+                "trigger": r.get("trigger", "every_tick"),
+                "description": r.get("description", ""),
+                "durability": round(r.get("durability", 0), 1),
+                "decay_rate": r.get("decay_rate", 0.1),
+                "execution_count": r.get("execution_count", 0),
+                "active": r.get("active", True),
+                "created_tick": r.get("created_tick", 0),
+                "effects_summary": str(r.get("effects", []))[:100],
+            })
+        return {"rules": rules, "active_count": sum(1 for r in rules if r.get("active", True))}
+
+
+@app.get("/rules/{location}")
+def get_location_rules(location: str):
+    """v10.1: 获取某地点的活跃规则摘要"""
+    with lock:
+        summaries = get_rules_summary(world, location)
+        return {"location": location, "rules": summaries}
 
 
 @app.get("/location/{loc_name}/history")
@@ -3026,10 +3662,10 @@ def start_tick_loop():
                     _do_auto_save()
             except Exception as e:
                 log.error(f"Tick异常: {e}")
-            _time.sleep(60)  # 每60秒一个tick
+            _time.sleep(15)  # 每15秒一个tick (加速模式)
     t = Thread(target=_loop, daemon=True)
     t.start()
-    log.info("Tick循环已启动 (60秒/tick, 每10tick自动保存快照)")
+    log.info("Tick循环已启动 (15秒/tick 加速模式, 每10tick自动保存快照)")
 
 
 @app.on_event("startup")
