@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-深圳生存模拟 - Bot智能体 v8.3.2
-v8.3.2 新增:
+深圳生存模拟 - Bot智能体 v8.4
+v8.4 新增:
+- 场景感知 (能看到附近的人正在做什么)
+- 社会记忆 (观察并记住附近bot的活动)
+v8.3.2 原有:
 - 认知失调驱动核心记忆 (期望与现实的差距触发深层记忆)
 - 无聊感增强 (行为多样性的心理学级别实现)
 - 心流状态 (投入感强的活动中获得额外满足感)
@@ -275,6 +278,25 @@ def heartbeat():
         update_boredom(plan)
         # v8.3.2: 认知失调检测
         check_cognitive_dissonance(plan, result_str, my_state)
+
+        # v8.4: 社会记忆 — 观察并记住附近bot的活动
+        try:
+            loc = my_state["location"]
+            loc_info = world["locations"].get(loc, {})
+            for nb in loc_info.get("bots", []):
+                if nb == BOT_ID:
+                    continue
+                ob = world["bots"].get(nb, {})
+                activity = ob.get("current_activity", "")
+                if activity and len(activity) > 3:
+                    ob_name = ob.get("name", nb)
+                    observation = f"[观察] 看到{ob_name}在{activity}"
+                    # 去重：不重复记录相同观察
+                    if observation not in memory[-10:]:
+                        memory.append(observation)
+                        log.info(observation)
+        except Exception:
+            pass
 
         # 6. 反思 (入睡时强制触发日终反思)
         is_going_to_sleep = "睡" in result_str or "躺下" in result_str
@@ -648,15 +670,20 @@ def think_and_plan(world, my_state, recent_msgs, high_priority_msgs, moments_con
     if moments_context:
         moments_text = f"\n=== 朋友圈动态 ===\n{moments_context}"
 
-    # === 附近的人详情 ===
+    # === v8.4: 附近的人详情（场景感知：能看到他们在做什么） ===
     nearby_detail = []
     for nb in nearby_bots[:5]:
         ob = world["bots"].get(nb, {})
         name = ob.get("name", "?")
         gender = ob.get("gender", "?")
-        sleeping = "💤" if ob.get("is_sleeping") else ""
-        nearby_detail.append(f"{name}({gender}{sleeping})")
-    nearby_text = "、".join(nearby_detail) if nearby_detail else "附近没有人"
+        activity = ob.get("current_activity", "")
+        if ob.get("is_sleeping"):
+            nearby_detail.append(f"{name}({gender}) - 正在睡觉")
+        elif activity:
+            nearby_detail.append(f"{name}({gender}) - 正在{activity}")
+        else:
+            nearby_detail.append(f"{name}({gender}) - 在附近")
+    nearby_text = "\n".join(nearby_detail) if nearby_detail else "附近没有人"
 
     # === 手机电量（不再展示给bot，避免充电焦虑） ===
     phone_text = ""
@@ -708,7 +735,8 @@ def think_and_plan(world, my_state, recent_msgs, high_priority_msgs, moments_con
 {bonds_text}
 
 === 周围环境 ===
-附近的人: {nearby_text}
+你看到附近的人:
+{nearby_text}
 NPC: {[n.get('name','?') for n in nearby_npcs]}
 可用工作: {[j.get('title','?') for j in available_jobs]}
 {task_text}

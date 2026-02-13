@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-深圳生存模拟 - 世界引擎 v8.3.2
+深圳生存模拟 - 世界引擎 v8.4
 =========================
-v8.3.2 新增:
+v8.4 新增:
+- 场景感知 (bot能看到附近的人正在做什么)
+- 个人命运事件 (对单个bot触发有实质后果的事件)
+- 对话后果系统 (八卦/承诺/冲突/请求有实质影响)
+v8.3.2 原有:
 - world端点字段补全 (long_term_goal/narrative_summary/pending_reply_to)
 - 起床动作硬编码 (绕过LLM)
 - JSON清洗增强 (trailing comma/控制字符)
@@ -426,6 +430,7 @@ def create_bot(bot_id):
         "long_term_goal": None,           # 长期目标
         "pending_reply_to": None,         # 待回应的对话 {"from": bot_id, "msg": "...", "tick": N}
         "recent_actions_synced": [],      # 由bot_agent同步过来的最近行动
+        "current_activity": "",              # v8.4: 当前正在做的事（一句话描述，供其他bot观察）
     }
 
 
@@ -466,7 +471,7 @@ def init_world():
                             "current_task", "selfie_count", "desires", "emotions",
                             "phone_battery", "values", "core_memories", "emotional_bonds",
                             "long_term_goal", "pending_reply_to", "recent_actions_synced",
-                            "narrative_summary"]:
+                            "narrative_summary", "current_activity"]:
                     if key in bdata:
                         bot[key] = bdata[key]
                 # 家庭关系：如果快照中为空则用默认值
@@ -873,6 +878,10 @@ def world_tick():
         if random.random() < 0.08:
             trigger_event()
 
+        # v8.4: 个人命运事件（每 tick 15% 概率对随机一个 bot 触发）
+        if random.random() < 0.15:
+            trigger_personal_fate()
+
         # === 被动朋友圈互动：每tick每个bot有概率刷朋友圈点赞 ===
         recent_moments = world.get("moments", [])[-10:]
         if recent_moments:
@@ -983,6 +992,115 @@ def trigger_event():
 
 
 # ============================================================
+# v8.4: 个人命运事件系统
+# ============================================================
+PERSONAL_FATE_EVENTS = [
+    # 经济类（有实质后果）
+    {"name": "手机被偷了", "desc": "你发现口袋里的手机不见了！可能是刚才挤公交的时候被偷的。",
+     "effect": {"money": -200, "mood": {"anxiety": 20, "anger": 15, "sadness": 10}}},
+    {"name": "在路上捜到一个钱包", "desc": "路边有一个钱包，里面有200块和一张身份证。你要怎么办？",
+     "effect": {"money": 200, "mood": {"happiness": 5, "anxiety": 5}},
+     "moral_dilemma": True},
+    {"name": "房东通知下月涨租200", "desc": "房东发来消息：“下个月开始租金涨200，不接受的话可以找别的地方。”",
+     "effect": {"mood": {"anxiety": 15, "anger": 10}}},
+    {"name": "收到老家汇来的1000块", "desc": "父母给你转了1000块，附言“在外面别乱花钱，注意身体”。",
+     "effect": {"money": 1000, "mood": {"happiness": 10, "sadness": 5, "loneliness": -10}}},
+    # 工作类
+    {"name": "被老板炒了", "desc": "老板说最近生意不好，要裁员，你被辞退了。",
+     "effect": {"job_lost": True, "mood": {"sadness": 20, "anxiety": 15, "anger": 10}}},
+    {"name": "有人给你介绍了一份好工作", "desc": "朋友说有个地方在招人，待遇不错，问你有没有兴趣。",
+     "effect": {"mood": {"happiness": 8, "anxiety": -5}}},
+    # 社交类（涉及其他bot）
+    {"name": "有人在背后说你坏话", "desc": "你无意中听到有人在说你的坏话，说你“不靠谱”。",
+     "effect": {"mood": {"anger": 15, "sadness": 10, "anxiety": 8}},
+     "social": "gossip_victim"},
+    {"name": "有人向你借钱", "desc": "附近的人过来说：“兄弟，能借我100块吗？我这个月实在周转不开。”",
+     "effect": {"mood": {"anxiety": 5}},
+     "social": "borrow_request"},
+    {"name": "有人送了你一份礼物", "desc": "一个你认识的人送了你一份小礼物，说“上次谢谢你帮忙”。",
+     "effect": {"mood": {"happiness": 12, "loneliness": -8}}},
+    # 道德困境
+    {"name": "看到有人在偷东西", "desc": "你看到一个人在偷超市的东西，他发现你看到了，用哀求的眼神看着你。",
+     "effect": {"mood": {"anxiety": 10, "sadness": 5}},
+     "moral_dilemma": True},
+    {"name": "老人在路边摔倒了", "desc": "一个老人在你面前摘倒了，周围的人都在观望，没人上前。",
+     "effect": {"mood": {"anxiety": 8, "sadness": 5}},
+     "moral_dilemma": True},
+    # 意外惊喜
+    {"name": "买彩票中了200块", "desc": "你买的彩票居然中了200块！虽然不多，但心情很好。",
+     "effect": {"money": 200, "mood": {"happiness": 15}}},
+    {"name": "被狗追着跑了三条街", "desc": "一只没拴绳的大狗突然向你冲过来，你拔腿就跑。",
+     "effect": {"energy": -15, "mood": {"anxiety": 12, "anger": 5}}},
+    {"name": "在公园里遇到了老乡", "desc": "竟然在深圳遇到了老家的熟人！两人聊了很久，感觉很亲切。",
+     "effect": {"mood": {"happiness": 15, "loneliness": -20, "sadness": 5}}},
+    {"name": "食物中毒了", "desc": "吃了路边摆的东西后肠胃特别难受，可能不干净。",
+     "effect": {"energy": -20, "satiety": -30, "mood": {"sadness": 10, "anger": 8}}},
+]
+
+def trigger_personal_fate(bot_id=None):
+    """v8.4: 对单个随机bot触发个人命运事件，有实质后果"""
+    alive = [bid for bid, b in world["bots"].items() if b["status"] == "alive" and not b.get("is_sleeping")]
+    if not alive:
+        return
+    target = bot_id or random.choice(alive)
+    bot = world["bots"][target]
+    event = random.choice(PERSONAL_FATE_EVENTS)
+    eff = event["effect"]
+
+    # 应用金钱效果
+    if "money" in eff:
+        bot["money"] = max(0, bot["money"] + eff["money"])
+    # 应用能量效果
+    if "energy" in eff:
+        bot["energy"] = max(0, min(100, bot["energy"] + eff["energy"]))
+    # 应用饱腹度效果
+    if "satiety" in eff:
+        bot["satiety"] = max(0, min(100, bot["satiety"] + eff["satiety"]))
+    # 应用情绪效果
+    mood_eff = eff.get("mood", {})
+    emotions = bot.get("emotions", {})
+    for emo_key, delta in mood_eff.items():
+        emotions[emo_key] = max(0, min(100, emotions.get(emo_key, 0) + delta))
+    bot["emotions"] = emotions
+    # 失去工作
+    if eff.get("job_lost") and bot.get("job"):
+        bot["job"] = None
+        bot["current_task"] = None
+
+    # 通过消息板发送给目标bot，让它在下一次心跳时感知到
+    world["message_board"].append({
+        "to": target,
+        "from": "fate",
+        "msg": f"【命运事件】{event['name']}: {event['desc']}",
+        "tick": world["time"]["tick"],
+        "priority": "high",
+    })
+
+    # 记录到世界事件
+    world["events"].append({
+        "tick": world["time"]["tick"],
+        "time": world["time"]["virtual_datetime"],
+        "event": f"{bot['name']}: {event['name']}",
+        "desc": event["desc"],
+    })
+
+    # 如果涉及其他bot（借钱、八卦），随机选择一个附近的bot作为关联方
+    if event.get("social"):
+        loc = bot["location"]
+        nearby = [b for b in world["locations"].get(loc, {}).get("bots", []) if b != target]
+        if nearby:
+            other = random.choice(nearby)
+            other_name = world["bots"][other].get("name", "?")
+            if event["social"] == "borrow_request":
+                # 让目标bot知道是谁借钱
+                world["message_board"][-1]["msg"] += f" (是{other_name}向你借钱)"
+            elif event["social"] == "gossip_victim":
+                world["message_board"][-1]["msg"] += f" (似乎是{other_name}在说)"
+
+    log.warning(f'☄️ 命运事件: {bot["name"]}({target}) - {event["name"]}')
+
+
+# ============================================================
 # 开放式动作解释与执行
 # ============================================================
 def process_action(bot_id, plan):
@@ -998,6 +1116,7 @@ def process_action(bot_id, plan):
             "time": world["time"]["virtual_datetime"],
             "plan": plan, "action": action, "result": result
         })
+        bot["current_activity"] = "刚刚醒来，正在伸懒腰"
         return {"action": action, "result": result}
 
     loc = bot["location"]
@@ -1110,6 +1229,10 @@ def process_action(bot_id, plan):
     })
     if len(bot["action_log"]) > 50:
         bot["action_log"] = bot["action_log"][-30:]
+
+    # v8.4: 更新当前活动描述（供其他bot观察）
+    activity_desc = action.get("desc", "")[:40] if action.get("desc") else plan[:40]
+    bot["current_activity"] = activity_desc
 
     return {"action": action, "result": result}
 
@@ -1354,7 +1477,99 @@ warmth_delta范围-10到+10，正数表示关系升温，负数表示关系降�
 
         Thread(target=_update_bonds_after_talk, daemon=True).start()
 
-        # === NPC会"回嘴"：用LLM生成NPC的回应 ===
+        # === v8.4: 对话后果判定 — 让说话有重量 ===
+        def _judge_talk_consequences():
+            try:
+                consequence_prompt = f"""两个人刚刚进行了一次对话。请判断这次对话是否产生了以下任何一种社会后果。
+
+{bot.get('name', bot_id)}对{target}说: "{message}"
+
+请用JSON输出:
+{{{{
+  "has_consequence": true/false,
+  "type": "gossip/promise/request/conflict/none",
+  "detail": "一句话描述后果",
+  "gossip_about": "如果是八卦，说的是谁",
+  "promise_content": "如果是承诺，承诺了什么"
+}}}}
+只输出JSON。"""
+                resp = client.chat.completions.create(
+                    model="gpt-4.1-nano",
+                    messages=[{"role": "user", "content": consequence_prompt}],
+                    temperature=0.3, max_tokens=150,
+                )
+                raw = resp.choices[0].message.content.strip()
+                if raw.startswith("```"): raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+                start = raw.find("{")
+                end = raw.rfind("}") + 1
+                if start >= 0 and end > start:
+                    raw = raw[start:end]
+                cdata = json.loads(raw)
+
+                if not cdata.get("has_consequence"):
+                    return
+
+                ctype = cdata.get("type", "none")
+                detail = cdata.get("detail", "")
+
+                if ctype == "gossip" and cdata.get("gossip_about"):
+                    # 八卦传播：将信息传递给第三方
+                    gossip_target = cdata["gossip_about"]
+                    # 找到被八卦的bot
+                    for bid2, b2 in world["bots"].items():
+                        if b2.get("name") == gossip_target and bid2 != bot_id and bid2 != target:
+                            world["message_board"].append({
+                                "to": bid2, "from": "rumor",
+                                "msg": f"【流言】有人在背后议论你: {detail}",
+                                "tick": world["time"]["tick"], "priority": "normal",
+                            })
+                            log.info(f"[八卦传播] {bot_id}和{target}在议论{gossip_target}: {detail}")
+                            break
+
+                elif ctype == "promise":
+                    # 记录承诺，待实现
+                    promise = cdata.get("promise_content", detail)
+                    bot["action_log"].append({
+                        "tick": world["time"]["tick"],
+                        "time": world["time"]["virtual_datetime"],
+                        "plan": f"承诺: {promise}",
+                        "action": {"category": "social", "type": "promise"},
+                        "result": f"对{target}做出了承诺: {promise}"
+                    })
+                    log.info(f"[承诺] {bot_id}对{target}: {promise}")
+
+                elif ctype == "conflict":
+                    # 冲突大幅影响关系
+                    emotions["anger"] = min(100, emotions.get("anger", 0) + 10)
+                    emotions["sadness"] = min(100, emotions.get("sadness", 0) + 5)
+                    bot["emotions"] = emotions
+                    if target.startswith("bot_") and target in world["bots"]:
+                        tb = world["bots"][target]
+                        te = tb.get("emotions", {})
+                        te["anger"] = min(100, te.get("anger", 0) + 10)
+                        tb["emotions"] = te
+                        # 降低双方信任
+                        if bot_id in tb.get("emotional_bonds", {}):
+                            tb["emotional_bonds"][bot_id]["trust"] = max(0, tb["emotional_bonds"][bot_id].get("trust", 50) - 10)
+                            tb["emotional_bonds"][bot_id]["hostility"] = min(100, tb["emotional_bonds"][bot_id].get("hostility", 0) + 10)
+                    log.info(f"[冲突] {bot_id}和{target}发生了冲突: {detail}")
+
+                elif ctype == "request":
+                    # 请求帮助，通知对方
+                    if target.startswith("bot_") and target in world["bots"]:
+                        world["message_board"].append({
+                            "to": target, "from": bot_id,
+                            "msg": f"【请求】{bot.get('name', bot_id)}向你提出了请求: {detail}",
+                            "tick": world["time"]["tick"], "priority": "high",
+                        })
+                    log.info(f"[请求] {bot_id}向{target}: {detail}")
+
+            except Exception as e:
+                log.error(f"[对话后果判定失败] {bot_id}->{target}: {e}")
+
+        Thread(target=_judge_talk_consequences, daemon=True).start()
+
+        # === NPC会“回嘴”：用LLM生成NPC的回应 ===
         # NPC互动计数（用于NPC演化）
         if not target.startswith("bot_"):
             for loc_data in world["locations"].values():
@@ -1826,6 +2041,7 @@ def get_world():
                 "pending_reply_to": bot.get("pending_reply_to"),
                 "core_memories": bot.get("core_memories", []),
                 "recent_actions_synced": bot.get("recent_actions_synced", []),
+                "current_activity": bot.get("current_activity", ""),
             }
         for loc_name, loc_data in world["locations"].items():
             safe["locations"][loc_name] = {
