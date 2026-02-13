@@ -72,11 +72,11 @@ def grok_generate(prompt: str, save_path: str) -> dict:
 # ============================================================
 
 # --- 数值衰减/恢复 ---
-HP_DECAY_PER_TICK = 1
-SATIETY_DECAY = 3
-ENERGY_DAY_COST = 4
-ENERGY_NIGHT_RECOVER = 3
-ENERGY_SLEEP_RECOVER = 12
+HP_DECAY_PER_TICK = 0          # HP不自然衰减，只有极端情况才掉
+SATIETY_DECAY = 2              # 放缓饥饿（原3）
+ENERGY_DAY_COST = 2            # 放缓能量消耗（原4）
+ENERGY_NIGHT_RECOVER = 5       # 夜间恢复加快
+ENERGY_SLEEP_RECOVER = 15      # 睡眠恢复加快
 DESIRE_DECAY_ON_FULFILL = 30
 
 # --- 天气系统 ---
@@ -260,36 +260,62 @@ FAMILY_RELATIONS = {
 
 # --- 生活琐事 / 随机事件 ---
 RANDOM_EVENTS = [
+    # 天气/环境类
     {"name": "突然下雨", "desc": "天空突然下起大雨，没带伞的人都在找地方躲雨", "effect": "mood_sadness_up",
      "mood": {"sadness": 5, "anxiety": 3}},
-    {"name": "路边有人吵架", "desc": "两个人因为停车问题在路边大吵", "effect": "mood_anxiety_up",
-     "mood": {"anxiety": 3, "anger": 2}},
     {"name": "看到美丽的晚霞", "desc": "天边出现了绝美的晚霞，很多人停下来拍照", "effect": "mood_happy",
      "mood": {"happiness": 8, "loneliness": -3}},
-    {"name": "附近有免费试吃", "desc": "新开的店在搞免费试吃活动", "effect": "free_food",
+    {"name": "被蚊子咬了", "desc": "胳膊上被蚊子咬了好几个包", "effect": "mosquito",
+     "mood": {"anger": 3}},
+    {"name": "电梯坏了", "desc": "住的楼电梯又坏了，只能爬楼梯", "effect": "elevator_broken",
+     "mood": {"anger": 4, "anxiety": 2}},
+    # 人际互动类
+    {"name": "路边有人吵架", "desc": "两个人因为停车问题在路边大吵，引来一圈围观的人", "effect": "mood_anxiety_up",
+     "mood": {"anxiety": 3, "anger": 2}},
+    {"name": "附近有免费试吃", "desc": "新开的店在搞免费试吃活动，排了好长的队", "effect": "free_food",
      "mood": {"happiness": 5}},
-    {"name": "手机快没电了", "desc": "手机电量只剩5%，需要找地方充电", "effect": "phone_low",
-     "mood": {"anxiety": 5}},
     {"name": "收到诈骗电话", "desc": "接到一个自称是公安局的电话，要求转账", "effect": "scam_call",
      "mood": {"anxiety": 8, "anger": 5}},
     {"name": "路上捡到50块钱", "desc": "在地上发现一张50元纸币", "effect": "found_money",
      "mood": {"happiness": 10}},
-    {"name": "看到流浪猫", "desc": "路边有一只可怜的流浪猫在喵喵叫", "effect": "stray_cat",
+    {"name": "看到流浪猫", "desc": "路边有一只可怜的流浪猫在喵喵叫，看起来很饿", "effect": "stray_cat",
      "mood": {"sadness": 3, "loneliness": -2}},
-    {"name": "WiFi信号特别好", "desc": "蹭到了一个超快的免费WiFi", "effect": "good_wifi",
-     "mood": {"happiness": 3}},
-    {"name": "被蚊子咬了", "desc": "胳膊上被蚊子咬了好几个包", "effect": "mosquito",
-     "mood": {"anger": 3}},
-    {"name": "听到好听的街头音乐", "desc": "有人在路边弹吉他唱歌，很好听", "effect": "street_music",
+    {"name": "听到好听的街头音乐", "desc": "有人在路边弹吉他唱歌，周围聚了一圈人", "effect": "street_music",
      "mood": {"happiness": 6, "loneliness": -4}},
-    {"name": "电梯坏了", "desc": "住的楼电梯又坏了，只能爬楼梯", "effect": "elevator_broken",
-     "mood": {"anger": 4, "anxiety": 2}},
-    {"name": "收到家人的微信红包", "desc": "家人发了一个小红包过来", "effect": "family_gift",
+    {"name": "收到家人的微信红包", "desc": "家人发了一个小红包过来，附带一句“注意身体”", "effect": "family_gift",
      "mood": {"happiness": 10, "loneliness": -8}},
-    {"name": "看到有人在直播", "desc": "路边有网红在直播，围了一圈人", "effect": "live_stream",
+    {"name": "看到有人在直播", "desc": "路边有网红在直播，围了一圈人，很热闹", "effect": "live_stream",
      "mood": {"happiness": 2}},
-    {"name": "物价又涨了", "desc": "常去的快餐店涨价了2块钱", "effect": "price_up",
+    {"name": "物价又涨了", "desc": "常去的快餐店涨价了2块钱，老板说是因为房租涨了", "effect": "price_up",
      "mood": {"anxiety": 4, "anger": 3}},
+    # NPC主动互动类（新增）
+    {"name": "房东来收租", "desc": "房东王姐来敲门收租了，还唠叨了几句“下个月要涨租”", "effect": "rent_due",
+     "mood": {"anxiety": 8, "anger": 3}},
+    {"name": "早餐摊老李多给了一个鸡蛋", "desc": "早餐摊老李今天心情好，多给了一个煎蛋，说“小伙子多吃点”", "effect": "npc_kind",
+     "mood": {"happiness": 6, "loneliness": -3}},
+    {"name": "保安查居住证", "desc": "保安老张来查居住证，没有的话要被赶出去", "effect": "id_check",
+     "mood": {"anxiety": 10, "anger": 5}},
+    {"name": "HR小陈主动联系你", "desc": "HR小陈发来消息：“我们公司在招人，你有兴趣吗？”", "effect": "job_offer",
+     "mood": {"happiness": 5, "anxiety": -3}},
+    {"name": "隔壁室友小刘邀请你吃饭", "desc": "室友小刘说今晚他做饭，问你要不要一起吃", "effect": "dinner_invite",
+     "mood": {"happiness": 8, "loneliness": -10}},
+    {"name": "手机贩子阿强发来一条货源信息", "desc": "阿强发来消息：“兄弟，新到一批货，价格美丽，要不要看看？”", "effect": "biz_opportunity",
+     "mood": {"happiness": 3}},
+    # 社会事件类（新增）
+    {"name": "街头有人卖艺", "desc": "一个年轻人在街头表演魔术，引来一大群人围观", "effect": "street_show",
+     "mood": {"happiness": 5, "loneliness": -3}},
+    {"name": "附近开了一家新店", "desc": "街角新开了一家奶茶店，打折促销中，排队的人很多", "effect": "new_shop",
+     "mood": {"happiness": 3}},
+    {"name": "城管来了", "desc": "城管来清理路边摊贩，小贩们慢慢散去，气氛紧张", "effect": "chengguan",
+     "mood": {"anxiety": 5, "anger": 3}},
+    {"name": "有人在发传单", "desc": "一个大姐在发传单，上面写着“高薪招聘，日结200”", "effect": "flyer",
+     "mood": {"happiness": 2}},
+    {"name": "深夜有人在楼下吵架", "desc": "半夜被楼下的吵架声吵醒，一对情侣在大声争君", "effect": "night_fight",
+     "mood": {"anger": 3, "anxiety": 4, "sadness": 2}},
+    {"name": "快递到了", "desc": "之前网上买的东西到了，拆快递的快乐无与伦比", "effect": "package",
+     "mood": {"happiness": 8}},
+    {"name": "看到以前的同学发的朋友圈", "desc": "以前的同学在朋友圈晒了买车照，而你还在城中村挤公交", "effect": "social_compare",
+     "mood": {"sadness": 8, "anxiety": 5, "happiness": -5}},
 ]
 
 # --- 新闻模板（会被真实新闻替换） ---
@@ -624,14 +650,16 @@ def world_tick():
             else:
                 bot["energy"] = max(0, bot["energy"] - ENERGY_DAY_COST)
 
-            # 手机电量消耗
-            bot["phone_battery"] = max(0, bot.get("phone_battery", 100) - random.randint(1, 3))
+            # 手机电量：自动慢充，作为背景变量不影响决策
+            if bot.get("phone_battery", 100) < 80:
+                bot["phone_battery"] = min(100, bot.get("phone_battery", 100) + random.randint(3, 8))
+            else:
+                bot["phone_battery"] = max(30, bot.get("phone_battery", 100) - random.randint(0, 2))
 
-            # 饥饿惩罚
+            # 饥饿惩罚（只有极端情况才触发）
             if bot["satiety"] <= 0:
                 bot["hp"] = max(0, bot["hp"] - 1)
-                emotions["sadness"] = min(100, emotions.get("sadness", 10) + 3)
-                emotions["anxiety"] = min(100, emotions.get("anxiety", 20) + 2)
+                emotions["sadness"] = min(100, emotions.get("sadness", 10) + 2)
                 log.warning(f"{bid} 饥饿中，额外扣除1HP！")
 
             # === 情绪自然衰减/增长 ===
@@ -750,9 +778,12 @@ def world_tick():
         if t["virtual_hour"] == 6 and t["tick"] > 1:
             distribute_hp(alive_count)
 
-        # 随机事件
-        event_chance = 0.08 + WEATHER_TYPES.get(world["weather"]["current"], {}).get("event_chance_mod", 0)
+        # 随机事件（提高概率，让环境更活跃）
+        event_chance = 0.20 + WEATHER_TYPES.get(world["weather"]["current"], {}).get("event_chance_mod", 0)
         if random.random() < event_chance:
+            trigger_event()
+        # 第二次事件机会（低概率，让世界更丰富）
+        if random.random() < 0.08:
             trigger_event()
 
         # === 被动朋友圈互动：每tick每个bot有概率刷朋友圈点赞 ===
@@ -826,7 +857,7 @@ def trigger_event():
 # 开放式动作解释与执行
 # ============================================================
 def process_action(bot_id, plan):
-    """一层LLM解析：用gpt-4.1-mini将自然语言计划映射到JSON action"""
+    """涌现友好架构：LLM解析为5大类 + 保留自然语言描述，世界引擎解释后果"""
     bot = world["bots"][bot_id]
     loc = bot["location"]
     loc_info = world["locations"][loc]
@@ -841,6 +872,12 @@ def process_action(bot_id, plan):
     job_list = ', '.join([j['title'] for j in JOBS.get(loc, [])])
     all_locs = list(LOCATIONS.keys())
 
+    # 检查是否有进行中的任务
+    current_task = bot.get("current_task")
+    task_hint = ""
+    if current_task and current_task.get("status") == "in_progress":
+        task_hint = f"\n⭐ 当前有进行中的工作任务[{current_task.get('task_name','')}]，如果计划提到继续做/继续工作/继续任务，必须用survive类别的work。"
+
     prompt = f"""你是一个JSON转换器。将用户的自然语言计划转为一个JSON动作对象。只输出JSON，不要任何其他文字。
 
 ## 上下文
@@ -850,39 +887,43 @@ def process_action(bot_id, plan):
 - 所有可去地点: {all_locs}
 - 当前地点可用工作: {job_list if job_list else '无'}
 - 可选食物: {food_list}
+{task_hint}
 
-## 可用动作（选择最匹配的一个）
-1. 吃东西: {{"action":"eat","food":"食物名"}}
-   食物名必须是: {list(FOOD_MENU.keys())}
-2. 工作: {{"action":"work","job":"职位名"}}
-3. 移动: {{"action":"move","to":"目的地名"}}
-   目的地必须是: {all_locs}
-4. 聊天: {{"action":"talk","target":"bot_X或npc名","message":"说的话"}}
-5. 发朋友圈: {{"action":"post_moment","content":"朋友圈内容","mood":"happy/sad/neutral/angry"}}
-6. 刷手机: {{"action":"browse_phone","focus":"news/moments/hot"}}
-7. 拍照: {{"action":"selfie","prompt":"英文拍照场景描述"}}
-8. 休息: {{"action":"rest"}}
-9. 探索: {{"action":"explore"}}
-10. 睡觉: {{"action":"sleep"}}
-11. 起床: {{"action":"wake_up"}}
-12. 亲密: {{"action":"intimate","target":"bot_X"}}
-13. 交易: {{"action":"trade","target":"bot_X","give_type":"money","give_amount":数字,"want_type":"money","want_amount":数字}}
-14. 出卖身体: {{"action":"sell_body","want":"money/food"}}
-15. 寻欢: {{"action":"seek_pleasure"}}
-16. 自由行动(以上都不匹配时): {{"action":"free_action","desc":"具体描述","category":"leisure/creative/exercise/shopping/learning/other"}}
+## 5大行动类别
 
-## 规则（按优先级排序，从上到下检查）
-- ⭐ 如果计划提到"继续做"/"继续工作"/"继续任务"/"继续布置"/"继续整理"/"继续搬货"等与当前任务相关的内容，必须用work
-- 如果计划提到吃/喝/食物/快餐/炒粉/饭团/奶茶/火锅/泡面，用eat，选最接近的食物名
-- 如果计划提到工作/赚钱/送外卖/找工作/应聘/打工，用work
-- 如果计划提到去某个地点且不是当前地点，用move
-- 如果计划提到去某个地点且就是当前地点，用explore
-- 如果计划同时包含"去某地"和"做某事"，优先用move（到了再做事）
-- 如果计划提到发朋友圈/晒/分享到朋友圈，用post_moment
-- 如果计划提到刷手机/看新闻/看热搜/刷朋友圈，用browse_phone
-- 如果计划提到拍照/自拍/拍视频/拍照片，用selfie
-- 如果计划提到和某人聊天/搭讪/交流/打电话/问/聊聊，用talk
-- 如果以上都不匹配，用free_action
+### 1. survive (生存类: 吃饭/工作/睡觉/休息)
+- 吃东西: {{"category":"survive","type":"eat","food":"食物名","desc":"原始描述"}}
+  食物名必须是: {list(FOOD_MENU.keys())}
+- 工作: {{"category":"survive","type":"work","job":"职位名","desc":"原始描述"}}
+- 睡觉: {{"category":"survive","type":"sleep","desc":"原始描述"}}
+- 休息: {{"category":"survive","type":"rest","desc":"原始描述"}}
+
+### 2. social (社交类: 聊天/亲密/交易)
+- 聊天: {{"category":"social","type":"talk","target":"bot_X或npc名","message":"说的话","desc":"原始描述"}}
+- 亲密: {{"category":"social","type":"intimate","target":"bot_X","desc":"原始描述"}}
+- 交易: {{"category":"social","type":"trade","target":"bot_X","give_type":"money","give_amount":数字,"want_type":"money","want_amount":数字,"desc":"原始描述"}}
+
+### 3. move (移动类)
+{{"category":"move","to":"目的地","desc":"原始描述"}}
+目的地必须是: {all_locs}
+
+### 4. express (表达类: 发朋友圈/拍照/刷手机)
+- 发朋友圈: {{"category":"express","type":"post_moment","content":"朋友圈内容","mood":"happy/sad/neutral/angry","desc":"原始描述"}}
+- 刷手机: {{"category":"express","type":"browse_phone","focus":"news/moments/hot","desc":"原始描述"}}
+- 拍照: {{"category":"express","type":"selfie","prompt":"英文拍照场景描述","desc":"原始描述"}}
+
+### 5. free (自由行动: 以上都不匹配时，保留bot的原始描述)
+{{"category":"free","desc":"完整保留bot的原始描述"}}
+
+## 规则
+- 只输出一个JSON对象，不要输出多个
+- 如果计划包含多个动作（如"吃热粉然后拍照"），只取第一个动作
+- 如果计划明确涉及吃/喝/工作/睡觉/休息，用survive
+- 如果计划明确涉及和某人互动，用social
+- 如果计划明确涉及去其他地点，用move
+- 如果计划明确涉及发朋友圈/拍照/刷手机，用express
+- 其他一切行为（画画/弹吉他/健身/逛街/思考/写代码/喝酒/看电影/散步...）用free
+- desc字段始终完整保留用户的原始计划文本
 
 ## 计划
 "{plan}"
@@ -899,15 +940,24 @@ def process_action(bot_id, plan):
         raw = resp.choices[0].message.content.strip()
         if raw.startswith("```"):
             raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-        # 提取第一个JSON对象
+        # 提取第一个JSON对象（处理LLM返回多个JSON的情况）
         start = raw.find("{")
-        end = raw.rfind("}") + 1
-        if start >= 0 and end > start:
+        if start >= 0:
+            depth = 0
+            end = start
+            for i in range(start, len(raw)):
+                if raw[i] == "{":
+                    depth += 1
+                elif raw[i] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        end = i + 1
+                        break
             raw = raw[start:end]
         action = json.loads(raw)
     except Exception as e:
         log.error(f"LLM解析 {bot_id} 动作失败: {e}")
-        action = {"action": "free_action", "desc": plan, "category": "other"}
+        action = {"category": "free", "desc": plan}
 
     result = execute(bot_id, action)
     bot["action_log"].append({
@@ -925,10 +975,13 @@ def process_action(bot_id, plan):
 
 def execute(bot_id, action):
     bot = world["bots"][bot_id]
-    act = action.get("action", "idle")
+    cat = action.get("category", "free")
+    act = action.get("type", action.get("action", ""))  # 兼容新旧格式
+    desc = action.get("desc", "")
     emotions = bot.get("emotions", {})
 
-    if act == "move":
+    # === 移动类 ===
+    if cat == "move" or act == "move":
         dest = action.get("to", "")
         if dest in LOCATIONS and dest != bot["location"]:
             old_loc = bot["location"]
@@ -1050,22 +1103,6 @@ def execute(bot_id, action):
         log.info(f"{bot_id}: {msg}")
         return msg
 
-    elif act == "explore":
-        loc = bot["location"]
-        if random.random() < 0.3:
-            finds = ["一张优惠券", "一本旧书", "一个充电宝", "50元现金", "一张名片", "一瓶矿泉水"]
-            found = random.choice(finds)
-            if found == "50元现金":
-                bot["money"] += 50
-            else:
-                bot["inventory"].append(found)
-            emotions["happiness"] = min(100, emotions.get("happiness", 50) + 2)
-            msg = f"在{loc}探索，发现了{found}！"
-        else:
-            msg = f"在{loc}四处逛了逛，熟悉了环境"
-        bot["emotions"] = emotions
-        log.info(f"{bot_id}: {msg}")
-        return msg
 
     elif act == "trade":
         target = action.get("target", "")
@@ -1316,47 +1353,90 @@ def execute(bot_id, action):
         log.info(f"{bot_id}: {msg}")
         return msg
 
-    elif act == "free_action":
+    elif act == "free_action" or cat == "free":
         desc = action.get("desc", "做了点事情")
-        category = action.get("category", "other")
-        # 根据类别给不同的效果
-        if category == "exercise":
-            bot["energy"] = max(0, bot["energy"] - 10)
-            bot["hp"] = min(100, bot["hp"] + 2)
-            emotions["happiness"] = min(100, emotions.get("happiness", 50) + 2)
-            emotions["anxiety"] = max(0, emotions.get("anxiety", 20) - 5)
-        elif category == "creative":
-            bot["skills"]["creative"] = min(100, bot["skills"].get("creative", 10) + 2)
-            emotions["happiness"] = min(100, emotions.get("happiness", 50) + 2)
-        elif category == "learning":
-            bot["skills"]["tech"] = min(100, bot["skills"].get("tech", 10) + 1)
-            emotions["anxiety"] = max(0, emotions.get("anxiety", 20) - 2)
-        elif category == "leisure":
-            emotions["happiness"] = min(100, emotions.get("happiness", 50) + 2)
-            emotions["loneliness"] = max(0, emotions.get("loneliness", 30) - 2)
-            bot["energy"] = min(100, bot["energy"] + 3)
-        elif category == "shopping":
-            cost = random.randint(10, 50)
-            if bot["money"] >= cost:
-                bot["money"] -= cost
-                emotions["happiness"] = min(100, emotions.get("happiness", 50) + 3)
-                desires = bot.get("desires", {})
-                desires["greed"] = max(0, desires.get("greed", 20) - 5)
-                bot["desires"] = desires
-            else:
-                return f"想{desc}，但钱不够"
-        else:
-            emotions["happiness"] = min(100, emotions.get("happiness", 50) + 1)
-
-        bot["emotions"] = emotions
-        msg = f"{desc}"
-        log.info(f"{bot_id}: [自由行动/{category}] {msg}")
-        return msg
+        # 用LLM解释自由行动的后果，让世界更加丰富
+        consequence = interpret_free_action(bot_id, bot, desc)
+        log.info(f"{bot_id}: [自由行动] {desc} -> {consequence}")
+        return consequence
 
     else:
-        msg = "静静地待着，观察周围"
-        log.info(f"{bot_id}: {msg}")
-        return msg
+        # 其他未识别的行动也走自由解释
+        desc = action.get("desc", str(action))
+        consequence = interpret_free_action(bot_id, bot, desc)
+        log.info(f"{bot_id}: [未分类行动] {desc} -> {consequence}")
+        return consequence
+
+
+def interpret_free_action(bot_id, bot, desc):
+    """LLM解释自由行动的后果，返回叙事性结果并应用数值变化"""
+    emotions = bot.get("emotions", {})
+    loc = bot["location"]
+
+    try:
+        resp = client.chat.completions.create(
+            model="gpt-4.1-nano",
+            messages=[{"role": "user", "content": f"""你是深圳生存模拟的世界引擎。一个角色正在执行以下行动，请解释后果。
+
+角色: {bot.get('name', bot_id)}
+地点: {loc}
+行动: {desc}
+当前钱: {bot['money']}元
+当前能量: {bot['energy']}
+
+请输出一个JSON：
+{{
+  "narrative": "一句话描述发生了什么（第三人称，生动具体）",
+  "money_delta": 0,
+  "energy_delta": -3,
+  "happiness_delta": 0,
+  "skill_up": null,
+  "found_item": null
+}}
+
+规则：
+- narrative要生动具体，像小说叙述
+- money_delta通常为0或负数（花钱），不要随便给钱
+- energy_delta通常为-2到-5（做事消耗能量）
+- happiness_delta范围-5到+5
+- skill_up可以是"creative"/"tech"/"social"/"physical"或null
+- found_item可以是一个物品名或null（小概率发现东西）
+- 只输出JSON"""}],
+            temperature=0.7, max_tokens=200,
+        )
+        raw = resp.choices[0].message.content.strip()
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+        start = raw.find("{")
+        end = raw.rfind("}") + 1
+        if start >= 0 and end > start:
+            raw = raw[start:end]
+        result = json.loads(raw)
+
+        # 应用数值变化
+        narrative = result.get("narrative", desc)
+        bot["money"] = max(0, bot["money"] + int(result.get("money_delta", 0)))
+        bot["energy"] = max(0, min(100, bot["energy"] + int(result.get("energy_delta", -3))))
+        h_delta = int(result.get("happiness_delta", 0))
+        emotions["happiness"] = max(0, min(100, emotions.get("happiness", 50) + h_delta))
+        bot["emotions"] = emotions
+
+        skill = result.get("skill_up")
+        if skill and skill in bot["skills"]:
+            bot["skills"][skill] = min(100, bot["skills"][skill] + 1)
+
+        item = result.get("found_item")
+        if item:
+            bot["inventory"].append(item)
+            narrative += f"（发现了{item}）"
+
+        return narrative
+
+    except Exception as e:
+        log.error(f"interpret_free_action失败: {e}")
+        # fallback: 简单处理
+        bot["energy"] = max(0, bot["energy"] - 3)
+        return desc
 
 
 # ============================================================

@@ -444,13 +444,8 @@ def think_and_plan(world, my_state, recent_msgs, high_priority_msgs, moments_con
         nearby_detail.append(f"{name}({gender}{sleeping})")
     nearby_text = "、".join(nearby_detail) if nearby_detail else "附近没有人"
 
-    # === 手机电量 ===
-    phone = my_state.get("phone_battery", 100)
+    # === 手机电量（不再展示给bot，避免充电焦虑） ===
     phone_text = ""
-    if phone <= 10:
-        phone_text = "\n📱 手机快没电了！无法刷手机或拍照。"
-    elif phone <= 30:
-        phone_text = f"\n📱 手机电量{phone}%，省着用。"
 
     prompt = f"""你是{persona['name']}，{persona['age']}岁{persona['gender']}，来自{persona['origin']}，{persona['edu']}学历。
 性格: {persona['personality']}
@@ -505,11 +500,10 @@ NPC: {[n.get('name','?') for n in nearby_npcs]}
 请你以{persona['name']}的第一人称视角，先进行一段内心独白(2-4句话，体现你的性格、情绪和当前处境)，然后做出一个行动决策。
 
 重要约束：
-- 不要重复你最近做过的事情！看看你的近期记忆，避免连续做同样的事。
-- 如果你已经和某人聊过多次，换个人聊或做别的事。
-- 如果你已经在同一个地方待了很久，考虑去别的地方。
-- 不要捧造没有发生的事件（比如你没去过音乐节就不要提音乐节）。
-- 基于你的实际记忆和状态来做决策，不要编造经历。
+- 基于你的实际记忆和状态来做决策，不要编造没发生过的经历。
+- 你是一个有个性的真实的人，按照你的性格、情绪和欲望自由行动。
+- 如果你真的想连续做同一件事（比如连续画三幅画），那就去做。专注和痴迷也是人的一部分。
+- 你的行动应该被你的内心驱动，而不是被规则约束。
 
 你可以做任何一个真实的人会做的事情，包括但不限于:
 - 吃饭(在当前位置直接吃，不需要移动): 城中村快餐5元、路边摊炒粉12元、便利店饭团8元、奶茶15元、火锅60元
