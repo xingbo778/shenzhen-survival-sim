@@ -82,7 +82,7 @@ def grok_generate(prompt: str, save_path: str) -> dict:
 # ============================================================
 
 # --- 寿命系统 (HP→不可逆寿命) ---
-AGING_BASE = 0.02              # 每tick基础衰老 (100寿命 / 0.02 = 5000tick ≈ 208天)
+AGING_BASE = 0.2               # 每tick基础衰老 (100寿命 / 0.2 = 500tick ≈ 21天)
 AGING_HUNGER_MULT = 5.0        # 饥饿时衰老加速倍率
 AGING_OVERWORK_MULT = 3.0      # 过劳时衰老加速倍率
 AGING_SICK_MULT = 2.0          # 生病时衰老加速倍率
@@ -456,6 +456,7 @@ def init_world():
             world["news_feed"] = snap.get("news_feed", [])
             world["hot_topics"] = snap.get("hot_topics", [])
             world["weather"] = snap.get("weather", world["weather"])
+            world["food_prices"] = snap.get("food_prices", {})
 
             for bid, bdata in snap.get("bots", {}).items():
                 bot = create_bot(bid)
@@ -464,7 +465,8 @@ def init_world():
                             "skills", "inventory", "relationships", "action_log", "is_sleeping",
                             "current_task", "selfie_count", "desires", "emotions",
                             "phone_battery", "values", "core_memories", "emotional_bonds",
-                            "long_term_goal", "pending_reply_to", "recent_actions_synced"]:
+                            "long_term_goal", "pending_reply_to", "recent_actions_synced",
+                            "narrative_summary"]:
                     if key in bdata:
                         bot[key] = bdata[key]
                 # 家庭关系：如果快照中为空则用默认值
@@ -2058,6 +2060,37 @@ if os.path.exists(avatar_dir):
 # ============================================================
 # 启动
 # ============================================================
+def _do_auto_save():
+    """自动保存快照（非async版本，供tick循环调用）"""
+    try:
+        with lock:
+            snapshot = {
+                "time": world["time"],
+                "weather": world["weather"],
+                "news_feed": world["news_feed"],
+                "hot_topics": world["hot_topics"],
+                "bots": {},
+                "events": world["events"][-50:],
+                "message_board": world["message_board"][-100:],
+                "moments": world["moments"][-100:],
+                "gallery": world["gallery"],
+                "world_narrative": world.get("world_narrative", ""),
+                "food_prices": world.get("food_prices", {}),
+            }
+            for bid, bot in world["bots"].items():
+                snapshot["bots"][bid] = dict(bot)
+                snapshot["bots"][bid]["action_log"] = bot["action_log"][-20:]
+                snapshot["bots"][bid]["long_term_goal"] = bot.get("long_term_goal")
+                snapshot["bots"][bid]["pending_reply_to"] = bot.get("pending_reply_to")
+                snapshot["bots"][bid]["recent_actions_synced"] = bot.get("recent_actions_synced", [])
+                snapshot["bots"][bid]["narrative_summary"] = bot.get("narrative_summary")
+            with open("/home/ubuntu/world_state_snapshot.json", "w") as f:
+                json.dump(snapshot, f, ensure_ascii=False)
+        log.info(f"自动快照已保存 (tick={world['time']['tick']})")
+    except Exception as e:
+        log.error(f"自动快照保存失败: {e}")
+
+
 def start_tick_loop():
     """用简单的线程循环代替APScheduler"""
     import time as _time
@@ -2065,19 +2098,22 @@ def start_tick_loop():
         while True:
             try:
                 world_tick()
+                # 每10个tick自动保存一次快照
+                if world["time"]["tick"] % 10 == 0:
+                    _do_auto_save()
             except Exception as e:
                 log.error(f"Tick异常: {e}")
             _time.sleep(60)  # 每60秒一个tick
     t = Thread(target=_loop, daemon=True)
     t.start()
-    log.info("Tick循环已启动 (60秒/tick)")
+    log.info("Tick循环已启动 (60秒/tick, 每10tick自动保存快照)")
 
 
 @app.on_event("startup")
 def on_startup():
     init_world()
     start_tick_loop()
-    log.info("=== 深圳生存模拟 v8.3 世界引擎启动 (情感重塑/同步总线/双向对话/长期目标) ===")
+    log.info("=== 深圳生存模拟 v8.3.2 世界引擎启动 (情感重塑/同步总线/双向对话/长期目标) ===")
     # 启动Bot进程
     for bot_id in PERSONAS:
         bot = world["bots"].get(bot_id)
