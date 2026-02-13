@@ -375,8 +375,8 @@ def think_and_plan(world, my_state, recent_msgs, high_priority_msgs, moments_con
 
     hp_msgs_text = ""
     if high_priority_msgs:
-        hp_msgs_text = "\n🔴 重要消息(请优先回应):\n" + "\n".join(
-            [f"- ⚠️ {m['from']}说: {m['msg']}" for m in high_priority_msgs]
+        hp_msgs_text = "\n🔴 有人在急切地找你:\n" + "\n".join(
+            [f"- {m['from']}说: {m['msg']}" for m in high_priority_msgs]
         )
 
     loc = my_state["location"]
@@ -460,13 +460,13 @@ def think_and_plan(world, my_state, recent_msgs, high_priority_msgs, moments_con
     weather_hint = ""
     w = weather.get("current", "")
     if w == "暴雨":
-        weather_hint = "外面下着暴雨，出门会淋湿，最好待在室内。"
+        weather_hint = "雨水砸在窗户上哗哗作响，外面的人都在跑。"
     elif w == "台风":
-        weather_hint = "台风来了！外面很危险，尽量不要出门！"
+        weather_hint = "风很大，窗户被吹得哐哐响，外面几乎没有人。"
     elif w == "高温":
-        weather_hint = "今天特别热，在外面走动会更耗能量。"
+        weather_hint = "热浪扑面而来，空气都是糊的，衣服贴在背上。"
     elif w == "晴天":
-        weather_hint = "天气不错，适合出门。"
+        weather_hint = "阳光很好，微风吹过来很舒服。"
 
     # === 工作任务上下文 ===
     task = my_state.get("current_task")
@@ -489,33 +489,33 @@ def think_and_plan(world, my_state, recent_msgs, high_priority_msgs, moments_con
     vh = world["time"]["virtual_hour"]
     time_context = ""
     if vh >= 22 or vh < 6:
-        time_context = "🌙 现在是深夜。如果你很累，可以考虑睡觉。"
+        time_context = "🌙 夜很深了，四周很安静。你感到困意在侵袭。"
     elif 6 <= vh < 8:
-        time_context = "🌅 清晨，新的一天开始了。"
+        time_context = "🌅 晨光透进来了，新的一天开始了。"
     elif 12 <= vh < 14:
-        time_context = "🌞 中午了，该吃午饭了。"
+        time_context = "🌞 太阳正当头顶，你闻到了饭菜的香味。"
     elif 18 <= vh < 20:
-        time_context = "🌆 傍晚，可以考虑吃晚饭、休息或社交。"
+        time_context = "🌆 天色渐暗，街上的灯一盏盏亮起来。"
     elif 20 <= vh < 22:
-        time_context = "🌃 晚上了，可以放松一下。"
+        time_context = "🌃 夜色降临，城市的另一面慢慢苏醒。"
 
     # === 寿命警告 ===
     lifespan = my_state['hp']
     aging_rate = my_state.get('aging_rate', 0.02)
     lifespan_warning = ""
     if lifespan < 30:
-        lifespan_warning = f"\n⚠️⚠️⚠️ 你的寿命只剩{lifespan:.1f}！你感到身体在走向衰竭。每一个决定都很重要。"
+        lifespan_warning = f"\n你感到身体很沉重，每走一步都很吃力。你隐约觉得自己的时间不多了。"
     elif lifespan < 60:
-        lifespan_warning = f"\n⚠️ 你的寿命已降到{lifespan:.1f}。你开始感受到岁月的侵蚀。"
+        lifespan_warning = f"\n你偶尔会感到一阵莫名的疲惫，身体似乎不如从前了。"
     if aging_rate > 0.05:
-        lifespan_warning += f"\n⚠️ 你正在加速衰老（衰老速度x{aging_rate/0.02:.1f}）！饱腹度和休息很重要！"
+        lifespan_warning += f"\n你的身体在报警——最近太拼了，你能感觉到衰老在加速。"
 
     # === 饥饿警告 ===
     satiety = my_state['satiety']
     if satiety <= 0:
-        hunger_warning = "\n⚠️⚠️⚠️ 你快饿死了！饱腹度为0，正在加速衰老！你应该立刻吃东西！在当前位置就能直接吃饭。"
+        hunger_warning = "\n你的肚子在痛苦地叫，眼前发黑，双腿发软。你能闻到附近飘来的饭菜香味。"
     elif satiety <= 20:
-        hunger_warning = "\n⚠️ 你很饿了，应该尽快吃点东西。在当前位置就能直接吃饭。"
+        hunger_warning = "\n你感觉四肢有点发软，肚子咕咕叫。要不先吃点东西？"
     else:
         hunger_warning = ""
 
@@ -554,9 +554,10 @@ def think_and_plan(world, my_state, recent_msgs, high_priority_msgs, moments_con
         from_name = pending_reply.get("from_name", pending_reply.get("from", "?"))
         from_id = pending_reply.get("from", "")
         pending_msg = pending_reply.get("msg", "")
-        pending_reply_text = f"""\n🗣️ 有人在等你回应!
-{from_name}({from_id})刚才对你说: "{pending_msg}"
-→ 你应该回应这个人，就像真实对话一样自然地回应。你的行动应该是: 和{from_name}聊天，回应他/她说的话。"""
+        # 信息呈现而非命令，让agent自己决定是否回应
+        pending_reply_text = f"""\n🗣️ {from_name}刚才对你说了话:
+"{pending_msg}"
+(你听到了这句话。你可以回应，也可以假装没听到——取决于你现在的心情和你对这个人的感觉。)"""
 
     prompt = f"""你是{persona['name']}，{persona['age']}岁{persona['gender']}，来自{persona['origin']}，{persona['edu']}学历。
 性格: {persona['personality']}
@@ -565,7 +566,7 @@ def think_and_plan(world, my_state, recent_msgs, high_priority_msgs, moments_con
 日常习惯: {persona.get('habits', '')}
 {family_text}
 
-你正在深圳这座城市里生活。你有自己的性格、情绪和欲望。你会像一个真实的人一样思考和行动。
+你正在深圳这座城市里生活。你有自己的性格、情绪和欲望。你会对有趣的事情感到好奇，对无聊的重复感到厌倦，对新认识的人感到既期待又紧张。你有自己的节奏。
 
 === 当前状态 ===
 时间: {world['time']['virtual_datetime']}  天气: {weather_text}
@@ -617,19 +618,20 @@ NPC: {[n.get('name','?') for n in nearby_npcs]}
 {get_world_narrative()}
 
 === 我的长期目标 ===
-{long_term_goal if long_term_goal else '还没有明确的长期目标，但你应该在生活中逐渐找到方向'}
+{long_term_goal if long_term_goal else '你还在摸索自己想要什么，但心里隐约有个方向在召唤你'}
 
-=== 你最近的行动(严禁重复!) ===
+=== 你最近做过的事 ===
 {chr(10).join(recent_actions[-5:]) if recent_actions else '无'}
+(你回忆起这些事情，如果一直在做同样的事，你会觉得有点无聊，想换换花样)
 
 请你以{persona['name']}的第一人称视角，先进行一段内心独白(2-4句话，体现你的性格、情绪和当前处境)，然后做出一个行动决策。
 
-重要约束：
-- 基于你的实际记忆和状态来做决策，不要编造没发生过的经历。
-- 你是一个有个性的真实的人，按照你的性格、情绪和欲望自由行动。
-- 寿命不可恢复！饥饿和过劳会加速衰老。注意吃饭和休息。
-- 严禁重复上面列出的最近行动！你是一个活生生的人，不是机器。如果你刚和某人聊过天，下一步应该做点别的。
-- 你的行动应该被你的内心和长期目标驱动，而不是被规则约束。
+请注意：
+- 你的决策应该来自你的真实记忆和当前感受，而不是想象中的经历。
+- 你有自己的性格和脾气，按照自己的节奏生活就好。
+- 你能感觉到身体的变化——饿了就想吃东西，累了就想休息，这些是本能。
+- 如果你回忆起刚才做过的事，想想：我现在还想继续做这件事吗？还是有别的什么吸引了我的注意？
+- 你心里有自己想要的东西，让那个方向引导你。
 
 你可以做任何一个真实的人会做的事情，包括但不限于:
 - 吃饭(在当前位置直接吃，不需要移动): 城中村快餐5元、路边摊炒粉12元、便利店饭团8元、奶茶15元、火锅60元
