@@ -1,26 +1,20 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-深圳生存模拟 - 世界引擎 v8.4
+深圳生存模拟 - 世界引擎 v9.0 (自我进化)
 =========================
-v8.4 新增:
-- 场景感知 (bot能看到附近的人正在做什么)
-- 个人命运事件 (对单个bot触发有实质后果的事件)
-- 对话后果系统 (八卦/承诺/冲突/请求有实质影响)
+v9.0 新增 (三大进化引擎):
+- 开放式行动后果: bot可以永久改变世界(开店/涂鸦/种树/创建设施)
+- 地点公共记忆 + 声望系统: 每个地点有历史,每个bot有公众声望
+- 代际传承: 死亡后财富转移/记忆变城市传说/新bot继承关系网
+v8.4 原有:
+- 场景感知/个人命运事件/对话后果系统
 v8.3.2 原有:
-- world端点字段补全 (long_term_goal/narrative_summary/pending_reply_to)
-- 起床动作硬编码 (绕过LLM)
-- JSON清洗增强 (trailing comma/控制字符)
-- API优雅降级 (拍照失败记录事件)
-- 动态经济系统 (食物供需价格)
-v8.3 新增:
-- 情感系统重塑 (衰减平衡，积极反馈)
-- 状态同步总线 (bot_agent完整状态同步)
-- 双向对话机制 (pending_reply驱动回应)
-- LLM鲁棒性强化 (正则提取JSON)
-- 长期目标字段 (long_term_goal)
+- 动态经济/心流/无聊感/认知失调
+v8.3 原有:
+- 同步总线/双向对话/长期目标
 v8.2 原有:
-- 寿命系统/固定开销/欲望衰减/世界叙事/NPC演化
+- 寿命系统/固定开销/欲望衰减/世界叙事
 v8 原有:
 - 天气/情绪/朋友圈/新闻/开放式行动/随机事件
 """
@@ -51,7 +45,7 @@ sh.setFormatter(logging.Formatter("%(asctime)s [WORLD] %(levelname)s %(message)s
 log.addHandler(fh)
 log.addHandler(sh)
 
-app = FastAPI(title="深圳生存模拟 v8")
+app = FastAPI(title="深圳生存模拟 v9.0 - 自我进化")
 client = OpenAI()
 lock = Lock()
 
@@ -381,6 +375,12 @@ world = {
     "moments": [],         # 朋友圈 (所有帖子)
     "gallery": [],         # 照片墙
     "food_prices": {},      # v8.3.2: 动态食物价格
+    # === v9.0: 三大进化引擎数据 ===
+    "world_modifications": [],   # 永久世界改造列表 [{creator, type, name, desc, location, tick, effects}]
+    "urban_legends": [],         # 城市传说 (死亡bot的核心记忆转化)
+    "generation_count": 0,       # 当前代数
+    "graveyard": [],             # 墓地 (死亡bot的记录)
+    "reputation_board": {},      # 全局声望榜 {bot_id: {score, tags, deeds}}
 }
 
 
@@ -431,6 +431,12 @@ def create_bot(bot_id):
         "pending_reply_to": None,         # 待回应的对话 {"from": bot_id, "msg": "...", "tick": N}
         "recent_actions_synced": [],      # 由bot_agent同步过来的最近行动
         "current_activity": "",              # v8.4: 当前正在做的事（一句话描述，供其他bot观察）
+        # v9.0: 进化引擎新字段
+        "reputation": {"score": 0, "tags": [], "deeds": []},  # 公众声望
+        "created_things": [],     # 这个bot创造的永久改变
+        "generation": 0,          # 第几代bot
+        "inherited_from": None,   # 继承自哪个死亡bot
+        "known_legends": [],      # 知道的城市传说
     }
 
 
@@ -444,6 +450,10 @@ def init_world():
             "npcs": generate_npcs(loc_name),
             "items": [],
             "jobs": JOBS.get(loc_name, []),
+            # v9.0: 地点公共记忆
+            "public_memory": [],       # 这个地点发生过的重要事件 [{event, actor, tick, impact}]
+            "modifications": [],       # 这个地点的永久改造 [{name, creator, desc, tick}]
+            "vibe": "普通",             # 地点氛围(由历史事件塾积而成)
         }
 
     # 尝试从快照恢复
@@ -462,6 +472,12 @@ def init_world():
             world["hot_topics"] = snap.get("hot_topics", [])
             world["weather"] = snap.get("weather", world["weather"])
             world["food_prices"] = snap.get("food_prices", {})
+            # v9.0: 恢复进化引擎数据
+            world["world_modifications"] = snap.get("world_modifications", [])
+            world["urban_legends"] = snap.get("urban_legends", [])
+            world["generation_count"] = snap.get("generation_count", 0)
+            world["graveyard"] = snap.get("graveyard", [])
+            world["reputation_board"] = snap.get("reputation_board", {})
 
             for bid, bdata in snap.get("bots", {}).items():
                 bot = create_bot(bid)
@@ -471,7 +487,10 @@ def init_world():
                             "current_task", "selfie_count", "desires", "emotions",
                             "phone_battery", "values", "core_memories", "emotional_bonds",
                             "long_term_goal", "pending_reply_to", "recent_actions_synced",
-                            "narrative_summary", "current_activity"]:
+                            "narrative_summary", "current_activity",
+                            # v9.0
+                            "reputation", "created_things", "generation",
+                            "inherited_from", "known_legends"]:
                     if key in bdata:
                         bot[key] = bdata[key]
                 # 家庭关系：如果快照中为空则用默认值
@@ -489,6 +508,14 @@ def init_world():
                 loc = bot["location"]
                 if loc in world["locations"] and bid not in world["locations"][loc]["bots"]:
                     world["locations"][loc]["bots"].append(bid)
+
+            # v9.0: 恢复地点的公共记忆和改造
+            for loc_name in world["locations"]:
+                loc_snap = snap.get("locations", {}).get(loc_name, {})
+                if loc_snap:
+                    world["locations"][loc_name]["public_memory"] = loc_snap.get("public_memory", [])
+                    world["locations"][loc_name]["modifications"] = loc_snap.get("modifications", [])
+                    world["locations"][loc_name]["vibe"] = loc_snap.get("vibe", "普通")
 
             log.info(f"从快照恢复成功: tick={world['time']['tick']}, {len(world['bots'])}个Bot")
             return
@@ -787,6 +814,8 @@ def world_tick():
                 log.error(f"!!! {bid} 已死亡 !!! HP归零")
                 if bid in world["locations"].get(loc, {}).get("bots", []):
                     world["locations"][loc]["bots"].remove(bid)
+                # v9.0: 触发代际传承机制
+                Thread(target=handle_bot_death, args=(bid,), daemon=True).start()
 
             # === 工作进度推进 ===
             task = bot.get("current_task")
@@ -893,6 +922,22 @@ def world_tick():
                         if m["bot_id"] != bid and bid not in m.get("likes", []):
                             if random.random() < 0.4:  # 40%概率点赞
                                 m["likes"].append(bid)
+
+        # === v9.0: 每天传播城市传说 ===
+        if vh == 20:
+            spread_urban_legends()
+
+        # === v9.0: 声望自然衰减 (每天向0回归一点) ===
+        if vh == 6:
+            for bid_r, bot_r in world["bots"].items():
+                if bot_r["status"] != "alive":
+                    continue
+                rep = bot_r.get("reputation", {"score": 0})
+                score = rep.get("score", 0)
+                if score > 0:
+                    rep["score"] = max(0, score - 1)
+                elif score < 0:
+                    rep["score"] = min(0, score + 1)
 
         # === 世界叙事摘要 (每天22:00生成) ===
         if vh == 22:
@@ -1101,6 +1146,534 @@ def trigger_personal_fate(bot_id=None):
 
 
 # ============================================================
+# v9.0 进化引擎一: 开放式行动后果 - 永久世界改造
+# ============================================================
+WORLD_MOD_TYPES = {
+    "open_shop": {"cost": 200, "desc": "开店/摆摊", "reputation": 5},
+    "create_art": {"cost": 0, "desc": "创作艺术(涂鸦/壁画/雕塑)", "reputation": 3},
+    "plant_tree": {"cost": 10, "desc": "种树/绿化", "reputation": 2},
+    "build_facility": {"cost": 500, "desc": "建造设施(书屋/健身角/公告栏)", "reputation": 8},
+    "organize_event": {"cost": 100, "desc": "组织活动(音乐会/市集/聚会)", "reputation": 6},
+    "name_place": {"cost": 0, "desc": "给地方起名/留下标记", "reputation": 1},
+    "teach_skill": {"cost": 0, "desc": "教别人技能", "reputation": 4},
+    "start_business": {"cost": 1000, "desc": "创业/开公司", "reputation": 10},
+}
+
+
+def judge_world_modification(bot_id, bot, action_desc, result_narrative):
+    """
+    v9.0: 判断一个行动是否产生了永久的世界改变。
+    在每次行动执行后调用，由LLM判断是否有永久改变。
+    """
+    try:
+        loc = bot["location"]
+        existing_mods = [m["name"] for m in world["locations"].get(loc, {}).get("modifications", [])]
+        
+        prompt = f"""一个角色刚刚执行了一个行动。请判断这个行动是否对世界产生了永久性的改变。
+
+角色: {bot.get('name', bot_id)}
+地点: {loc}
+行动: {action_desc}
+结果: {result_narrative}
+这个地点已有的改造: {existing_mods if existing_mods else '无'}
+
+可能的永久改变类型:
+- open_shop: 开店/摆摊(需要资金)
+- create_art: 创作艺术作品(涂鸦/壁画/雕塑)
+- plant_tree: 种树/绿化环境
+- build_facility: 建造公共设施
+- organize_event: 组织活动
+- name_place: 给地方起名/留下标记
+- teach_skill: 教别人技能
+- start_business: 创业
+
+请用JSON输出:
+{{"has_modification": true/false, "type": "类型名", "name": "改变的名称(如'小林的炒粉摊')", "desc": "一句话描述", "impact": "对周围人的影响"}}
+
+规则:
+- 只有真正有创造性的、能留下永久痕迹的行动才算永久改变
+- 吃饭/睡觉/聊天/散步等日常行为不算永久改变
+- 不要重复已有的改造
+- 大多数行动不会产生永久改变，请保守判断
+只输出JSON。"""
+        
+        resp = client.chat.completions.create(
+            model="gpt-4.1-nano",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3, max_tokens=200,
+        )
+        raw = resp.choices[0].message.content.strip()
+        if raw.startswith("```"): raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+        start = raw.find("{")
+        end = raw.rfind("}") + 1
+        if start >= 0 and end > start:
+            raw = raw[start:end]
+        data = json.loads(raw)
+        
+        if not data.get("has_modification"):
+            return None
+        
+        mod_type = data.get("type", "name_place")
+        mod_info = WORLD_MOD_TYPES.get(mod_type, {"cost": 0, "desc": "改变", "reputation": 1})
+        
+        # 检查资金是否足够
+        if bot["money"] < mod_info["cost"]:
+            log.info(f"[v9.0] {bot_id} 想{data.get('name','')}但资金不足(需{mod_info['cost']}元)")
+            return None
+        
+        # 扣除资金
+        if mod_info["cost"] > 0:
+            bot["money"] -= mod_info["cost"]
+        
+        # 创建永久改造记录
+        modification = {
+            "id": f"mod_{world['time']['tick']}_{bot_id}",
+            "creator": bot_id,
+            "creator_name": bot.get("name", bot_id),
+            "type": mod_type,
+            "name": data.get("name", "未命名"),
+            "desc": data.get("desc", ""),
+            "impact": data.get("impact", ""),
+            "location": loc,
+            "tick": world["time"]["tick"],
+            "time": world["time"]["virtual_datetime"],
+            "active": True,
+        }
+        
+        # 添加到世界改造列表
+        world["world_modifications"].append(modification)
+        # 添加到地点改造
+        if loc in world["locations"]:
+            world["locations"][loc]["modifications"].append(modification)
+        # 记录到bot的创造列表
+        bot["created_things"].append(modification["id"])
+        
+        # 更新声望
+        update_reputation(bot_id, mod_info["reputation"], f"创造了{data.get('name', '')}")
+        
+        # 记录到地点公共记忆
+        add_public_memory(loc, f"{bot.get('name', bot_id)}在这里{data.get('desc', '')}", bot_id, "creation")
+        
+        # 广播给所有人
+        world["events"].append({
+            "tick": world["time"]["tick"],
+            "time": world["time"]["virtual_datetime"],
+            "event": f"🌟 {bot.get('name', bot_id)}创造了[{data.get('name', '')}]",
+            "desc": data.get("desc", ""),
+        })
+        
+        # 如果是开店/摆摊，添加新的工作机会
+        if mod_type in ("open_shop", "start_business"):
+            new_job = {
+                "title": data.get("name", "新店员工"),
+                "skill": "social",
+                "min_skill": 5,
+                "pay": 35 + random.randint(0, 20),
+                "tasks": [{
+                    "name": f"在{data.get('name', '店铺')}工作",
+                    "duration": 2,
+                    "difficulty": 0.2,
+                    "desc": f"在{bot.get('name', bot_id)}开的{data.get('name', '店')}里帮忙"
+                }],
+            }
+            if loc in JOBS:
+                JOBS[loc].append(new_job)
+            else:
+                JOBS[loc] = [new_job]
+            if loc in world["locations"]:
+                world["locations"][loc]["jobs"] = JOBS.get(loc, [])
+        
+        log.warning(f"🌟 [v9.0 世界改造] {bot.get('name', bot_id)} 在{loc}创造了 [{data.get('name', '')}] (类型:{mod_type}, 花费:{mod_info['cost']}元)")
+        return modification
+        
+    except Exception as e:
+        log.error(f"[v9.0] 世界改造判断失败: {e}")
+        return None
+
+
+# ============================================================
+# v9.0 进化引擎二: 地点公共记忆 + 声望系统
+# ============================================================
+def add_public_memory(location, event_desc, actor_id, impact_type="neutral"):
+    """向地点添加公共记忆"""
+    if location not in world["locations"]:
+        return
+    memory_entry = {
+        "event": event_desc,
+        "actor": actor_id,
+        "actor_name": world["bots"].get(actor_id, {}).get("name", actor_id),
+        "tick": world["time"]["tick"],
+        "time": world["time"]["virtual_datetime"],
+        "impact": impact_type,  # positive/negative/neutral/creation/conflict/death
+    }
+    loc = world["locations"][location]
+    loc["public_memory"].append(memory_entry)
+    # 保留最近30条
+    if len(loc["public_memory"]) > 30:
+        loc["public_memory"] = loc["public_memory"][-25:]
+    
+    # 每10条记忆更新一次地点氛围
+    if len(loc["public_memory"]) % 10 == 0:
+        _update_location_vibe(location)
+
+
+def _update_location_vibe(location):
+    """根据公共记忆更新地点氛围"""
+    try:
+        loc = world["locations"][location]
+        memories = loc["public_memory"][-15:]
+        mem_text = "\n".join([f"- {m['event']} ({m['impact']})" for m in memories])
+        mods = loc.get("modifications", [])[-5:]
+        mods_text = "\n".join([f"- {m['name']}: {m['desc']}" for m in mods]) if mods else "无"
+        
+        resp = client.chat.completions.create(
+            model="gpt-4.1-nano",
+            messages=[{"role": "user", "content": f"""根据以下历史事件，用一个词或短语描述这个地点的氛围。
+
+地点: {location}
+原始描述: {loc['desc']}
+
+最近发生的事:
+{mem_text}
+
+地点改造:
+{mods_text}
+
+请用一个词或短语描述氛围(如"温馨的"/"紧张的"/"充满创意的"/"冷漠的"/"热闹的"):
+只输出氛围词，不要其他文字。"""}],
+            temperature=0.5, max_tokens=20,
+        )
+        vibe = resp.choices[0].message.content.strip().strip('"').strip()
+        loc["vibe"] = vibe[:10]  # 限制长度
+        log.info(f"[v9.0] {location} 氛围更新为: {vibe}")
+    except Exception as e:
+        log.error(f"[v9.0] 氛围更新失败: {e}")
+
+
+def update_reputation(bot_id, delta, deed_desc):
+    """更新bot的公众声望"""
+    bot = world["bots"].get(bot_id)
+    if not bot:
+        return
+    rep = bot.get("reputation", {"score": 0, "tags": [], "deeds": []})
+    rep["score"] = max(-100, min(100, rep.get("score", 0) + delta))
+    rep["deeds"].append({
+        "desc": deed_desc,
+        "delta": delta,
+        "tick": world["time"]["tick"],
+    })
+    if len(rep["deeds"]) > 20:
+        rep["deeds"] = rep["deeds"][-15:]
+    bot["reputation"] = rep
+    
+    # 同步到全局声望榜
+    world["reputation_board"][bot_id] = {
+        "name": bot.get("name", bot_id),
+        "score": rep["score"],
+        "tags": rep.get("tags", []),
+        "latest_deed": deed_desc,
+    }
+    
+    # 声望达到阈值时自动添加标签
+    score = rep["score"]
+    tags = rep.get("tags", [])
+    if score >= 30 and "受人尊敬" not in tags:
+        tags.append("受人尊敬")
+    elif score >= 15 and "有口碑" not in tags:
+        tags.append("有口碑")
+    elif score <= -15 and "名声不好" not in tags:
+        tags.append("名声不好")
+    elif score <= -30 and "臭名昭著" not in tags:
+        tags.append("臭名昭著")
+    rep["tags"] = tags[-5:]  # 最多5个标签
+
+
+def reputation_interaction_modifier(bot_id, target_id):
+    """根据声望调整社交互动的基础友好度"""
+    target_rep = world["bots"].get(target_id, {}).get("reputation", {}).get("score", 0)
+    if target_rep >= 20:
+        return 1.3  # 声望好的人更容易被接受
+    elif target_rep <= -20:
+        return 0.5  # 声望差的人会被排斥
+    return 1.0
+
+
+# ============================================================
+# v9.0 进化引擎三: 代际传承机制
+# ============================================================
+NEW_BOT_TEMPLATES = [
+    {"name": "孙明达", "age": 23, "gender": "男", "origin": "广东潮汕", "edu": "中专",
+     "personality": "踏实肯干，话不多但很靠谱。喜欢研究各种小生意。",
+     "values": "勤劳致富，实在做人，赚钱养家",
+     "bg": "刚来深圳打拼的年轻人，听说这里机会多",
+     "habits": "早起晚睡，爱吃路边摆，爱看财经新闻"},
+    {"name": "林婷婷", "age": 20, "gender": "女", "origin": "江西南昌", "edu": "大专在读",
+     "personality": "开朗乐观，爱笑爱闹。有点大大咧咧但很真诚。",
+     "values": "快乐最重要，人生苦短要及时行乐",
+     "bg": "来深圳实习的大学生，对一切都充满好奇",
+     "habits": "拍照、发朋友圈、吃吃吃、交朋友"},
+    {"name": "陈志强", "age": 35, "gender": "男", "origin": "湖南衡阳", "edu": "初中",
+     "personality": "沉默対言，经历过很多事。外表冷漠但内心柔软。",
+     "values": "生存第一，信任要经过考验，不轻易相信人",
+     "bg": "在深圳漂泊多年的老打工人，见过太多世态炎凉",
+     "habits": "独处、喝酒、看新闻、早起干活"},
+    {"name": "周雨晴", "age": 27, "gender": "女", "origin": "浙江温州", "edu": "本科",
+     "personality": "精明能干，有商业头脑。说话直接，不喜欢绕弯子。",
+     "values": "效率为王，时间就是金钱，要做就做最好的",
+     "bg": "温州商人家庭出身，来深圳寻找创业机会",
+     "habits": "看财报、建人脉、健身、发精致朋友圈"},
+    {"name": "刘小海", "age": 18, "gender": "男", "origin": "贵州遵义", "edu": "高中辍学",
+     "personality": "叛逆但善良，有街头智慧。嘴硬心软。",
+     "values": "自由最重要，不想被束缚，要活出自己的样子",
+     "bg": "辍学后独自来深圳闯荡，什么都不怕",
+     "habits": "游荡、听音乐、交朋友、吃路边摆"},
+]
+
+
+def handle_bot_death(bot_id):
+    """
+    v9.0: 处理bot死亡 - 触发代际传承机制
+    1. 财富转移给最亲密的人
+    2. 核心记忆变成城市传说
+    3. 生成新bot继承关系网
+    """
+    bot = world["bots"].get(bot_id)
+    if not bot:
+        return
+    
+    bot_name = bot.get("name", bot_id)
+    loc = bot["location"]
+    
+    log.warning(f"💀 [v9.0 代际传承] {bot_name}({bot_id}) 已死亡，触发传承机制...")
+    
+    # === 1. 财富转移 ===
+    inheritance = bot.get("money", 0)
+    closest_contact = None
+    max_closeness = 0
+    
+    # 先查家人
+    family = bot.get("family", {})
+    family_members = family.get("parents", []) + family.get("children", [])
+    for fm in family_members:
+        if fm in world["bots"] and world["bots"][fm]["status"] == "alive":
+            closest_contact = fm
+            max_closeness = 999  # 家人优先
+            break
+    
+    # 再查情感纽带
+    if not closest_contact:
+        bonds = bot.get("emotional_bonds", {})
+        for target, bond in bonds.items():
+            if target.startswith("bot_") and target in world["bots"]:
+                if world["bots"][target]["status"] == "alive":
+                    closeness = bond.get("closeness", 0)
+                    if closeness > max_closeness:
+                        max_closeness = closeness
+                        closest_contact = target
+    
+    if closest_contact and inheritance > 0:
+        world["bots"][closest_contact]["money"] += inheritance
+        heir_name = world["bots"][closest_contact].get("name", closest_contact)
+        world["message_board"].append({
+            "to": closest_contact, "from": "system",
+            "msg": f"【遗产】{bot_name}已经离开了这个世界。作为最亲近的人，你继承了{inheritance}元遗产。",
+            "tick": world["time"]["tick"], "priority": "high",
+        })
+        log.info(f"  财富转移: {inheritance}元 -> {heir_name}({closest_contact})")
+    
+    # === 2. 核心记忆变城市传说 ===
+    core_memories = bot.get("core_memories", [])
+    if core_memories:
+        # 选取最重要的记忆转化为传说
+        best_memories = core_memories[-3:]  # 最近3条
+        for mem in best_memories:
+            summary = mem.get("summary", "") if isinstance(mem, dict) else str(mem)
+            legend = {
+                "id": f"legend_{world['time']['tick']}_{bot_id}",
+                "original_bot": bot_id,
+                "original_name": bot_name,
+                "content": summary,
+                "origin_tick": world["time"]["tick"],
+                "origin_time": world["time"]["virtual_datetime"],
+                "location": loc,
+                "spread_count": 0,  # 传播次数
+            }
+            world["urban_legends"].append(legend)
+        log.info(f"  {len(best_memories)}条核心记忆转化为城市传说")
+    
+    # === 3. 记录到墓地 ===
+    grave = {
+        "bot_id": bot_id,
+        "name": bot_name,
+        "age": bot.get("age", 0),
+        "origin": bot.get("origin", ""),
+        "death_tick": world["time"]["tick"],
+        "death_time": world["time"]["virtual_datetime"],
+        "death_location": loc,
+        "final_money": bot.get("money", 0),
+        "reputation_score": bot.get("reputation", {}).get("score", 0),
+        "reputation_tags": bot.get("reputation", {}).get("tags", []),
+        "created_things": bot.get("created_things", []),
+        "long_term_goal": bot.get("long_term_goal", ""),
+        "narrative_summary": bot.get("narrative_summary", ""),
+    }
+    world["graveyard"].append(grave)
+    
+    # === 4. 地点公共记忆 ===
+    add_public_memory(loc, f"{bot_name}在这里离开了世界", bot_id, "death")
+    
+    # === 5. 通知所有认识的人 ===
+    bonds = bot.get("emotional_bonds", {})
+    for target_id in bonds:
+        if target_id.startswith("bot_") and target_id in world["bots"]:
+            if world["bots"][target_id]["status"] == "alive":
+                world["message_board"].append({
+                    "to": target_id, "from": "system",
+                    "msg": f"【讣告】{bot_name}已经离开了这个世界。",
+                    "tick": world["time"]["tick"], "priority": "high",
+                })
+    
+    # === 6. 生成新bot替代死亡的bot ===
+    _spawn_new_generation_bot(bot_id, bot)
+    
+    # 世界事件
+    world["events"].append({
+        "tick": world["time"]["tick"],
+        "time": world["time"]["virtual_datetime"],
+        "event": f"💀 {bot_name}离开了这个世界",
+        "desc": f"{bot_name}的一生结束了。{bot.get('narrative_summary', '')}",
+    })
+
+
+def _spawn_new_generation_bot(dead_bot_id, dead_bot):
+    """生成新一代bot替代死亡的bot"""
+    # 选择一个新人设
+    template = random.choice(NEW_BOT_TEMPLATES)
+    
+    world["generation_count"] = world.get("generation_count", 0) + 1
+    gen = world["generation_count"]
+    
+    # 复用死亡bot的ID
+    new_bot = create_bot(dead_bot_id)
+    new_bot["name"] = template["name"]
+    new_bot["age"] = template["age"]
+    new_bot["gender"] = template["gender"]
+    new_bot["origin"] = template["origin"]
+    new_bot["edu"] = template["edu"]
+    new_bot["hp"] = 100
+    new_bot["money"] = random.randint(100, 500)
+    new_bot["energy"] = 100
+    new_bot["satiety"] = 70
+    new_bot["status"] = "alive"
+    new_bot["generation"] = gen
+    new_bot["inherited_from"] = dead_bot.get("name", dead_bot_id)
+    new_bot["location"] = random.choice(list(LOCATIONS.keys()))
+    new_bot["home"] = random.choice(["宝安城中村", "南山公寓"])
+    
+    # 继承死亡bot的部分关系网络(作为"听说过")
+    dead_bonds = dead_bot.get("emotional_bonds", {})
+    inherited_bonds = {}
+    for target, bond in dead_bonds.items():
+        if target.startswith("bot_") and target in world["bots"]:
+            if world["bots"][target]["status"] == "alive" and bond.get("closeness", 0) > 30:
+                inherited_bonds[target] = {
+                    "trust": 20,
+                    "closeness": 5,
+                    "hostility": 0,
+                    "label": "听说过",
+                    "impressions": [f"听说{dead_bot.get('name', '')}和这个人关系不错"]
+                }
+    new_bot["emotional_bonds"] = inherited_bonds
+    
+    # 继承城市传说作为初始记忆
+    recent_legends = world.get("urban_legends", [])[-3:]
+    new_bot["known_legends"] = [l["id"] for l in recent_legends]
+    for legend in recent_legends:
+        new_bot["core_memories"].append({
+            "summary": f"[城市传说] 听说{legend['original_name']}的故事: {legend['content'][:50]}",
+            "emotion": "neutral",
+            "tick": world["time"]["tick"],
+            "time": world["time"]["virtual_datetime"],
+            "tag": "urban_legend",
+        })
+    
+    # 更新PERSONAS以便 bot_agent能读取新人设
+    PERSONAS[dead_bot_id] = {
+        "name": template["name"],
+        "age": template["age"],
+        "gender": template["gender"],
+        "origin": template["origin"],
+        "edu": template["edu"],
+        "home": new_bot["home"],
+        "start_loc": new_bot["location"],
+        "money": new_bot["money"],
+        "hp": 100,
+    }
+    
+    # 放入世界
+    world["bots"][dead_bot_id] = new_bot
+    loc = new_bot["location"]
+    if loc in world["locations"] and dead_bot_id not in world["locations"][loc]["bots"]:
+        world["locations"][loc]["bots"].append(dead_bot_id)
+    
+    # 启动新的bot_agent进程
+    try:
+        # 写入新人设到临时文件，供bot_agent读取
+        persona_override = {
+            "name": template["name"],
+            "age": template["age"],
+            "gender": template["gender"],
+            "origin": template["origin"],
+            "edu": template["edu"],
+            "personality": template["personality"],
+            "values": template["values"],
+            "bg": template["bg"] + f" (第{gen}代新居民，继承了{dead_bot.get('name', '')}的一些关系)",
+            "habits": template["habits"],
+            "family_info": "",
+        }
+        with open(f"/home/ubuntu/persona_override_{dead_bot_id}.json", "w") as f:
+            json.dump(persona_override, f, ensure_ascii=False)
+        
+        subprocess.Popen(
+            ["python3", "/home/ubuntu/bot_agent_v8.py"],
+            env=dict(os.environ, BOT_ID=dead_bot_id)
+        )
+        log.info(f"  新bot {template['name']}({dead_bot_id}) 已生成并启动 (第{gen}代)")
+    except Exception as e:
+        log.error(f"  启动新bot失败: {e}")
+    
+    # 全局事件
+    world["events"].append({
+        "tick": world["time"]["tick"],
+        "time": world["time"]["virtual_datetime"],
+        "event": f"🌟 新居民{template['name']}来到了深圳",
+        "desc": f"来自{template['origin']}的{template['name']}，{template['bg'][:30]}",
+    })
+
+
+def spread_urban_legends():
+    """每天传播城市传说 - 让活着的bot随机听到传说"""
+    legends = world.get("urban_legends", [])
+    if not legends:
+        return
+    alive_bots = [bid for bid, b in world["bots"].items() if b["status"] == "alive"]
+    for bot_id in alive_bots:
+        if random.random() < 0.15:  # 15%概率听到传说
+            legend = random.choice(legends)
+            bot = world["bots"][bot_id]
+            known = bot.get("known_legends", [])
+            if legend["id"] not in known:
+                known.append(legend["id"])
+                bot["known_legends"] = known[-10:]  # 最多记住10个
+                legend["spread_count"] = legend.get("spread_count", 0) + 1
+                world["message_board"].append({
+                    "to": bot_id, "from": "rumor",
+                    "msg": f"【城市传说】听说{legend['original_name']}曾经: {legend['content'][:60]}",
+                    "tick": world["time"]["tick"], "priority": "normal",
+                })
+
+
+# ============================================================
 # 开放式动作解释与执行
 # ============================================================
 def process_action(bot_id, plan):
@@ -1233,6 +1806,23 @@ def process_action(bot_id, plan):
     # v8.4: 更新当前活动描述（供其他bot观察）
     activity_desc = action.get("desc", "")[:40] if action.get("desc") else plan[:40]
     bot["current_activity"] = activity_desc
+
+    # v9.0: 判断行动是否产生永久世界改变
+    result_str = json.dumps(result, ensure_ascii=False) if isinstance(result, dict) else str(result)
+    if action.get("category") in ("free", "social") or "开" in plan or "创" in plan or "建" in plan or "摆" in plan:
+        try:
+            mod = judge_world_modification(bot_id, bot, plan, result_str)
+            if mod:
+                result_str += f" | 🌟永久改变: 创造了[{mod['name']}]"
+        except Exception as e:
+            log.error(f"[v9.0] 世界改造判断异常: {e}")
+
+    # v9.0: 记录重要行动到地点公共记忆
+    if action.get("category") in ("social", "free") and len(plan) > 5:
+        # 只记录有意义的行动
+        interesting_keywords = ["吵架", "打架", "帮助", "救", "表白", "分手", "结婚", "创业", "开店", "演出", "比赛", "教", "学"]
+        if any(kw in plan for kw in interesting_keywords):
+            add_public_memory(bot["location"], f"{bot.get('name', bot_id)}{plan[:30]}", bot_id, "notable")
 
     return {"action": action, "result": result}
 
@@ -2042,6 +2632,11 @@ def get_world():
                 "core_memories": bot.get("core_memories", []),
                 "recent_actions_synced": bot.get("recent_actions_synced", []),
                 "current_activity": bot.get("current_activity", ""),
+                # v9.0
+                "reputation": bot.get("reputation", {"score": 0, "tags": [], "deeds": []}),
+                "created_things": bot.get("created_things", []),
+                "generation": bot.get("generation", 0),
+                "inherited_from": bot.get("inherited_from"),
             }
         for loc_name, loc_data in world["locations"].items():
             safe["locations"][loc_name] = {
@@ -2050,7 +2645,17 @@ def get_world():
                 "bots": loc_data["bots"],
                 "npcs": [{"name": n["name"], "role": n["role"]} for n in loc_data["npcs"]],
                 "jobs": [{"title": j["title"], "pay": j["pay"]} for j in loc_data.get("jobs", [])],
+                # v9.0
+                "public_memory": loc_data.get("public_memory", [])[-5:],
+                "modifications": loc_data.get("modifications", []),
+                "vibe": loc_data.get("vibe", "普通"),
             }
+        # v9.0: 添加进化引擎数据
+        safe["world_modifications"] = world.get("world_modifications", [])[-20:]
+        safe["urban_legends"] = world.get("urban_legends", [])[-10:]
+        safe["graveyard"] = world.get("graveyard", [])
+        safe["generation_count"] = world.get("generation_count", 0)
+        safe["reputation_board"] = world.get("reputation_board", {})
         return safe
 
 
@@ -2094,6 +2699,12 @@ def get_bot_detail(bot_id: str):
             "narrative_summary": bot.get("narrative_summary"),
             "recent_actions_synced": bot.get("recent_actions_synced", []),
             "pending_reply_to": bot.get("pending_reply_to"),
+            # v9.0
+            "reputation": bot.get("reputation", {"score": 0, "tags": [], "deeds": []}),
+            "created_things": bot.get("created_things", []),
+            "generation": bot.get("generation", 0),
+            "inherited_from": bot.get("inherited_from"),
+            "known_legends": bot.get("known_legends", []),
         }
 
 
@@ -2235,6 +2846,74 @@ def get_world_narrative():
         return {"narrative": world.get("world_narrative", "这座城市刚刚苏醒，故事还没有开始。")}
 
 
+# === v9.0 进化引擎专用端点 ===
+@app.get("/evolution")
+def get_evolution_data():
+    """v9.0: 获取所有进化引擎数据"""
+    with lock:
+        return {
+            "world_modifications": world.get("world_modifications", []),
+            "urban_legends": world.get("urban_legends", []),
+            "graveyard": world.get("graveyard", []),
+            "generation_count": world.get("generation_count", 0),
+            "reputation_board": world.get("reputation_board", {}),
+            "location_vibes": {loc: data.get("vibe", "普通") for loc, data in world["locations"].items()},
+            "location_memories": {loc: data.get("public_memory", [])[-10:] for loc, data in world["locations"].items()},
+            "location_modifications": {loc: data.get("modifications", []) for loc, data in world["locations"].items()},
+        }
+
+
+@app.get("/location/{loc_name}/history")
+def get_location_history(loc_name: str):
+    """v9.0: 获取地点历史"""
+    with lock:
+        loc = world["locations"].get(loc_name)
+        if not loc:
+            return JSONResponse({"error": "location not found"}, 404)
+        return {
+            "name": loc_name,
+            "desc": loc["desc"],
+            "vibe": loc.get("vibe", "普通"),
+            "public_memory": loc.get("public_memory", []),
+            "modifications": loc.get("modifications", []),
+            "current_bots": loc["bots"],
+        }
+
+
+@app.get("/reputation")
+def get_reputation_board():
+    """v9.0: 获取声望榜"""
+    with lock:
+        board = []
+        for bid, bot in world["bots"].items():
+            rep = bot.get("reputation", {"score": 0, "tags": [], "deeds": []})
+            board.append({
+                "bot_id": bid,
+                "name": bot.get("name", bid),
+                "score": rep.get("score", 0),
+                "tags": rep.get("tags", []),
+                "deeds": rep.get("deeds", [])[-5:],
+                "generation": bot.get("generation", 0),
+                "status": bot.get("status", "alive"),
+            })
+        board.sort(key=lambda x: x["score"], reverse=True)
+        return {"reputation_board": board}
+
+
+@app.get("/graveyard")
+def get_graveyard():
+    """v9.0: 获取墓地记录"""
+    with lock:
+        return {"graveyard": world.get("graveyard", [])}
+
+
+@app.get("/legends")
+def get_urban_legends():
+    """v9.0: 获取城市传说"""
+    with lock:
+        return {"urban_legends": world.get("urban_legends", [])}
+
+
 @app.post("/admin/save_snapshot")
 async def save_snapshot():
     with lock:
@@ -2244,19 +2923,32 @@ async def save_snapshot():
             "news_feed": world["news_feed"],
             "hot_topics": world["hot_topics"],
             "bots": {},
+            "locations": {},
             "events": world["events"][-50:],
             "message_board": world["message_board"][-100:],
             "moments": world["moments"][-100:],
             "gallery": world["gallery"],
             "world_narrative": world.get("world_narrative", ""),
+            # v9.0
+            "world_modifications": world.get("world_modifications", []),
+            "urban_legends": world.get("urban_legends", []),
+            "generation_count": world.get("generation_count", 0),
+            "graveyard": world.get("graveyard", []),
+            "reputation_board": world.get("reputation_board", {}),
         }
         for bid, bot in world["bots"].items():
             snapshot["bots"][bid] = dict(bot)
             snapshot["bots"][bid]["action_log"] = bot["action_log"][-20:]
-            # v8.3: 确保新字段存入快照
             snapshot["bots"][bid]["long_term_goal"] = bot.get("long_term_goal")
             snapshot["bots"][bid]["pending_reply_to"] = bot.get("pending_reply_to")
             snapshot["bots"][bid]["recent_actions_synced"] = bot.get("recent_actions_synced", [])
+        # v9.0: 保存地点公共记忆
+        for loc_name, loc_data in world["locations"].items():
+            snapshot["locations"][loc_name] = {
+                "public_memory": loc_data.get("public_memory", []),
+                "modifications": loc_data.get("modifications", []),
+                "vibe": loc_data.get("vibe", "普通"),
+            }
         with open("/home/ubuntu/world_state_snapshot.json", "w") as f:
             json.dump(snapshot, f, ensure_ascii=False, indent=2)
     return {"ok": True, "tick": world["time"]["tick"]}
@@ -2286,12 +2978,19 @@ def _do_auto_save():
                 "news_feed": world["news_feed"],
                 "hot_topics": world["hot_topics"],
                 "bots": {},
+                "locations": {},
                 "events": world["events"][-50:],
                 "message_board": world["message_board"][-100:],
                 "moments": world["moments"][-100:],
                 "gallery": world["gallery"],
                 "world_narrative": world.get("world_narrative", ""),
                 "food_prices": world.get("food_prices", {}),
+                # v9.0
+                "world_modifications": world.get("world_modifications", []),
+                "urban_legends": world.get("urban_legends", []),
+                "generation_count": world.get("generation_count", 0),
+                "graveyard": world.get("graveyard", []),
+                "reputation_board": world.get("reputation_board", {}),
             }
             for bid, bot in world["bots"].items():
                 snapshot["bots"][bid] = dict(bot)
@@ -2300,9 +2999,17 @@ def _do_auto_save():
                 snapshot["bots"][bid]["pending_reply_to"] = bot.get("pending_reply_to")
                 snapshot["bots"][bid]["recent_actions_synced"] = bot.get("recent_actions_synced", [])
                 snapshot["bots"][bid]["narrative_summary"] = bot.get("narrative_summary")
+            # v9.0: 保存地点公共记忆
+            for loc_name, loc_data in world["locations"].items():
+                snapshot["locations"][loc_name] = {
+                    "public_memory": loc_data.get("public_memory", []),
+                    "modifications": loc_data.get("modifications", []),
+                    "vibe": loc_data.get("vibe", "普通"),
+                }
             with open("/home/ubuntu/world_state_snapshot.json", "w") as f:
                 json.dump(snapshot, f, ensure_ascii=False)
         log.info(f"自动快照已保存 (tick={world['time']['tick']})")
+        log.info(f"  v9.0: {len(world.get('world_modifications',[]))}个世界改造, {len(world.get('urban_legends',[]))}个城市传说, {len(world.get('graveyard',[]))}个墓地记录")
     except Exception as e:
         log.error(f"自动快照保存失败: {e}")
 
@@ -2329,7 +3036,7 @@ def start_tick_loop():
 def on_startup():
     init_world()
     start_tick_loop()
-    log.info("=== 深圳生存模拟 v8.3.2 世界引擎启动 (情感重塑/同步总线/双向对话/长期目标) ===")
+    log.info("=== 深圳生存模拟 v9.0 世界引擎启动 (自我进化: 世界改造/地点记忆+声望/代际传承) ===")
     # 启动Bot进程
     for bot_id in PERSONAS:
         bot = world["bots"].get(bot_id)

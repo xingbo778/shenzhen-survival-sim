@@ -83,6 +83,35 @@ async def api_add_bot(request: Request):
     except:
         return {"error": "failed"}
 
+# v9.0 进化引擎API代理
+@app.get("/api/evolution")
+def api_evolution():
+    try:
+        return requests.get(f"{ENGINE}/evolution", timeout=5).json()
+    except:
+        return {"error": "engine offline"}
+
+@app.get("/api/reputation")
+def api_reputation():
+    try:
+        return requests.get(f"{ENGINE}/reputation", timeout=5).json()
+    except:
+        return {"reputation_board": []}
+
+@app.get("/api/graveyard")
+def api_graveyard():
+    try:
+        return requests.get(f"{ENGINE}/graveyard", timeout=5).json()
+    except:
+        return {"graveyard": []}
+
+@app.get("/api/legends")
+def api_legends():
+    try:
+        return requests.get(f"{ENGINE}/legends", timeout=5).json()
+    except:
+        return {"urban_legends": []}
+
 # ===== 静态文件 =====
 @app.get("/avatars/{filename}")
 def serve_avatar(filename: str):
@@ -136,7 +165,7 @@ def dashboard():
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>深圳生存模拟 v8</title>
+<title>深圳生存模拟 v9.0</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { font-family: 'SF Pro Display', -apple-system, 'PingFang SC', sans-serif; background: #0a0a0f; color: #e0e0e0; overflow: hidden; height: 100vh; }
@@ -273,6 +302,26 @@ body { font-family: 'SF Pro Display', -apple-system, 'PingFang SC', sans-serif; 
 .gallery-item .caption { padding: 6px 8px; font-size: 10px; color: #888; }
 .gallery-item .bot-name { color: #4d96ff; font-weight: 600; }
 
+/* ===== EVOLUTION PANEL (v9.0) ===== */
+.evolution-panel { display: none; padding: 12px; overflow-y: auto; flex: 1; }
+.evolution-panel.visible { display: block; }
+.evo-section { margin-bottom: 16px; }
+.evo-section h3 { font-size: 13px; color: #4d96ff; margin-bottom: 8px; padding-bottom: 4px; border-bottom: 1px solid rgba(77,150,255,0.2); }
+.evo-card { background: rgba(20,20,30,0.6); border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; padding: 10px; margin-bottom: 8px; }
+.evo-card .title { font-size: 12px; font-weight: 600; color: #e0e0e0; margin-bottom: 4px; }
+.evo-card .desc { font-size: 11px; color: #888; line-height: 1.5; }
+.evo-card .meta { font-size: 10px; color: #555; margin-top: 4px; }
+.evo-card.legend { border-left: 3px solid rgba(255,152,0,0.5); }
+.evo-card.modification { border-left: 3px solid rgba(107,203,119,0.5); }
+.evo-card.graveyard { border-left: 3px solid rgba(136,136,136,0.5); }
+.evo-card.reputation { border-left: 3px solid rgba(77,150,255,0.5); }
+.rep-score { font-size: 16px; font-weight: 700; }
+.rep-score.positive { color: #6bcb77; }
+.rep-score.negative { color: #ff4444; }
+.rep-score.neutral { color: #888; }
+.rep-tag { display: inline-block; font-size: 9px; padding: 2px 6px; border-radius: 4px; background: rgba(77,150,255,0.1); color: #4d96ff; margin: 2px; }
+.gen-badge { display: inline-block; font-size: 9px; padding: 1px 5px; border-radius: 3px; background: rgba(255,215,0,0.15); color: #ffd93d; margin-left: 4px; }
+
 /* ===== MSG BAR ===== */
 .msg-bar { display: none; padding: 8px; gap: 6px; background: rgba(0,0,0,0.3); border-top: 1px solid rgba(255,255,255,0.06); align-items: center; flex-shrink: 0; }
 .msg-bar.visible { display: flex; }
@@ -395,6 +444,7 @@ body { font-family: 'SF Pro Display', -apple-system, 'PingFang SC', sans-serif; 
         <div class="log-tabs" id="logTabs">
             <div class="log-tab active" data-log="world_engine" onclick="switchLog('world_engine', this)">🌍 世界</div>
             <div class="log-tab" onclick="switchView('events')">📖 事件流</div>
+            <div class="log-tab" onclick="switchView('evolution')">🧬 进化</div>
         </div>
         <div class="view-toggle" id="viewToggle">
             <button class="view-btn active" id="btnLogView" onclick="setContentView('log')">📋 日志</button>
@@ -405,6 +455,7 @@ body { font-family: 'SF Pro Display', -apple-system, 'PingFang SC', sans-serif; 
         <div class="moments-content" id="momentsContent"></div>
         <div class="gallery-content" id="galleryContent"></div>
         <div class="event-stream" id="eventStream"></div>
+        <div class="evolution-panel" id="evolutionPanel" style="display:none;"></div>
         <div class="msg-bar" id="msgBar">
             <select class="sender-select" id="senderAlias">
                 <option value="一个路人">路人</option>
@@ -610,7 +661,7 @@ function initTabs() {
 
 // ===== VIEW SWITCHING =====
 function hideAllContent() {
-    ['logContent','chatContent','momentsContent','galleryContent','eventStream'].forEach(id => {
+    ['logContent','chatContent','momentsContent','galleryContent','eventStream','evolutionPanel'].forEach(id => {
         const el = document.getElementById(id);
         if (el) { el.style.display = 'none'; el.classList.remove('visible'); }
     });
@@ -634,6 +685,10 @@ function switchView(view) {
     } else if (view === 'events') {
         document.getElementById('eventStream').style.display = 'block';
         fetchEvents();
+    } else if (view === 'evolution') {
+        document.getElementById('evolutionPanel').style.display = 'block';
+        document.getElementById('evolutionPanel').classList.add('visible');
+        fetchEvolution();
     }
 }
 
@@ -807,6 +862,101 @@ async function fetchEvents() {
             '<div class="event-card '+e.type+'"><div class="event-type">'+e.icon+' '+e.label+'</div><div class="event-body">'+e.body.replace(/</g,'&lt;')+'</div></div>'
         ).join('');
     } catch(e){}
+}
+
+// ===== v9.0: EVOLUTION PANEL =====
+async function fetchEvolution() {
+    try {
+        const [evoResp, repResp, legResp, graveResp] = await Promise.all([
+            fetch('/api/evolution'),
+            fetch('/api/reputation'),
+            fetch('/api/legends'),
+            fetch('/api/graveyard')
+        ]);
+        const evo = await evoResp.json();
+        const rep = await repResp.json();
+        const leg = await legResp.json();
+        const grave = await graveResp.json();
+        
+        const panel = document.getElementById('evolutionPanel');
+        let html = '';
+        
+        // 声望榜
+        html += '<div class="evo-section"><h3>\ud83c\udfc6 声望榜</h3>';
+        const board = (rep.reputation_board || []).filter(b => b.status === 'alive').slice(0, 8);
+        if (board.length > 0) {
+            board.forEach(b => {
+                const scoreClass = b.score > 0 ? 'positive' : b.score < 0 ? 'negative' : 'neutral';
+                const tags = (b.tags || []).map(t => '<span class="rep-tag">'+t+'</span>').join('');
+                const gen = b.generation > 0 ? '<span class="gen-badge">第'+b.generation+'代</span>' : '';
+                html += '<div class="evo-card reputation"><div class="title">'+b.name+gen+' <span class="rep-score '+scoreClass+'">'+b.score+'</span></div><div class="desc">'+tags+'</div>';
+                if (b.deeds && b.deeds.length > 0) {
+                    html += '<div class="meta">最近: '+b.deeds[b.deeds.length-1]+'</div>';
+                }
+                html += '</div>';
+            });
+        } else {
+            html += '<div class="evo-card"><div class="desc">还没有人建立声望</div></div>';
+        }
+        html += '</div>';
+        
+        // 世界改造
+        html += '<div class="evo-section"><h3>\ud83c\udf1f 世界改造</h3>';
+        const mods = evo.world_modifications || [];
+        if (mods.length > 0) {
+            mods.slice(-8).reverse().forEach(m => {
+                html += '<div class="evo-card modification"><div class="title">'+m.name+'</div><div class="desc">'+m.description+'</div><div class="meta">创建者: '+(m.creator_name||'?')+' | 地点: '+(m.location||'?')+'</div></div>';
+            });
+        } else {
+            html += '<div class="evo-card"><div class="desc">还没有人改变这个世界</div></div>';
+        }
+        html += '</div>';
+        
+        // 城市传说
+        html += '<div class="evo-section"><h3>\ud83d\udcdc 城市传说</h3>';
+        const legends = leg.urban_legends || [];
+        if (legends.length > 0) {
+            legends.slice(-6).reverse().forEach(l => {
+                html += '<div class="evo-card legend"><div class="title">关于'+l.original_name+'的传说</div><div class="desc">'+l.content+'</div><div class="meta">传播次数: '+l.spread_count+' | 发源: '+l.location+'</div></div>';
+            });
+        } else {
+            html += '<div class="evo-card"><div class="desc">还没有城市传说诞生</div></div>';
+        }
+        html += '</div>';
+        
+        // 墓地
+        html += '<div class="evo-section"><h3>\ud83e\udea6 墓地</h3>';
+        const graves = grave.graveyard || [];
+        if (graves.length > 0) {
+            graves.forEach(g => {
+                html += '<div class="evo-card graveyard"><div class="title">'+g.name+' ('+g.age+'岁)</div><div class="desc">死因: '+(g.cause_of_death||'未知')+'</div><div class="meta">第'+(g.generation||0)+'代 | 财富: '+g.money+'元 | 关系数: '+g.relationship_count+'</div></div>';
+            });
+        } else {
+            html += '<div class="evo-card"><div class="desc">还没有人离开这个世界</div></div>';
+        }
+        html += '</div>';
+        
+        // 地点氛围
+        html += '<div class="evo-section"><h3>\ud83c\udfaf 地点氛围</h3>';
+        const vibes = evo.location_vibes || {};
+        Object.entries(vibes).forEach(([loc, vibe]) => {
+            const mems = (evo.location_memories || {})[loc] || [];
+            const locMods = (evo.location_modifications || {})[loc] || [];
+            html += '<div class="evo-card"><div class="title">'+loc+' - '+vibe+'</div>';
+            if (locMods.length > 0) {
+                html += '<div class="desc">设施: '+locMods.map(m => m.name).join(', ')+'</div>';
+            }
+            if (mems.length > 0) {
+                html += '<div class="meta">近期: '+mems.slice(-2).map(m => m.event).join('; ')+'</div>';
+            }
+            html += '</div>';
+        });
+        html += '</div>';
+        
+        panel.innerHTML = html;
+    } catch(e) {
+        document.getElementById('evolutionPanel').innerHTML = '<div style="text-align:center;color:#444;padding:40px;font-size:12px;">进化数据加载失败</div>';
+    }
 }
 
 async function fetchWorld() {
@@ -1047,6 +1197,28 @@ async function showDetail(botId) {
             }
         });
         html += '</div>';
+
+        // v9.0: Reputation
+        const rep = d.reputation || {score:0, tags:[], deeds:[]};
+        html += '<div class="detail-section"><h3>\ud83c\udfc6 声望</h3><div class="detail-values">';
+        const repClass = rep.score > 0 ? 'positive' : rep.score < 0 ? 'negative' : 'neutral';
+        html += '声望分: <span class="rep-score '+repClass+'">'+rep.score+'</span>';
+        if (rep.tags && rep.tags.length > 0) html += '<br>标签: '+rep.tags.map(t => '<span class="rep-tag">'+t+'</span>').join('');
+        if (d.generation > 0) html += '<br><span class="gen-badge">第'+d.generation+'代居民</span>';
+        if (d.inherited_from) html += ' (继承自 '+getBotName(d.inherited_from)+')';
+        if (rep.deeds && rep.deeds.length > 0) {
+            html += '<br>事迹: ';
+            rep.deeds.slice(-3).forEach(deed => { html += '<div style="font-size:10px;color:#888;margin:2px 0;">- '+deed+'</div>'; });
+        }
+        html += '</div></div>';
+
+        // v9.0: Created Things
+        const created = d.created_things || [];
+        if (created.length > 0) {
+            html += '<div class="detail-section"><h3>\ud83c\udf1f 创造物</h3>';
+            created.forEach(c => { html += '<div class="detail-memory">'+c.name+' @ '+c.location+'</div>'; });
+            html += '</div>';
+        }
 
         // Family
         const fam = d.family||{};

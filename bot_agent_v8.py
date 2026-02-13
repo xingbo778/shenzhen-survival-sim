@@ -1,21 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-深圳生存模拟 - Bot智能体 v8.4
-v8.4 新增:
-- 场景感知 (能看到附近的人正在做什么)
-- 社会记忆 (观察并记住附近bot的活动)
+深圳生存模拟 - Bot智能体 v9.0 (自我进化)
+v9.0 新增:
+- 感知地点历史和城市传说
+- 声望系统感知 (知道自己和别人的声望)
+- 创造性行动提示 (开店/涂鸦/种树/建设施)
+- 代际传承支持 (新bot继承关系网+城市传说)
+v8.4 原有:
+- 场景感知/社会记忆
 v8.3.2 原有:
-- 认知失调驱动核心记忆 (期望与现实的差距触发深层记忆)
-- 无聊感增强 (行为多样性的心理学级别实现)
-- 心流状态 (投入感强的活动中获得额外满足感)
-v8.3 新增:
-- 状态同步总线 (每次心跳同步完整状态)
-- 反重复升级 (行动+内容摘要作为联合键)
-- 长期目标驱动 (反思中设定/更新长期目标)
-- 双向对话回应 (pending_reply驱动回应)
-v8.2 原有:
-- 寿命感知/记忆去重/关系ID规范/行为多样性/世界叙事
+- 认知失调/无聊感/心流状态
+v8.3 原有:
+- 同步总线/反重复/长期目标/双向对话
 v8 原有:
 - 情绪/朋友圈/手机/天气/开放式行动
 """
@@ -109,6 +106,17 @@ PERSONAS = {
 }
 
 persona = PERSONAS.get(BOT_ID, PERSONAS["bot_1"])
+
+# v9.0: 支持代际传承 - 读取人设覆盖文件
+try:
+    override_path = f"/home/ubuntu/persona_override_{BOT_ID}.json"
+    if os.path.exists(override_path):
+        with open(override_path, "r") as f:
+            override = json.load(f)
+        persona = override
+        log.info(f"[v9.0] 加载代际传承人设: {override.get('name', '?')}")
+except Exception as e:
+    log.error(f"[v9.0] 加载人设覆盖失败: {e}")
 
 # === 名字→bot_id映射表 ===
 NAME_TO_ID = {v["name"]: k for k, v in PERSONAS.items()}
@@ -520,6 +528,19 @@ def think_and_plan(world, my_state, recent_msgs, high_priority_msgs, moments_con
     nearby_npcs = loc_info.get("npcs", [])
     available_jobs = loc_info.get("jobs", [])
     events = world.get("events", [])[-3:]
+
+    # v9.0: 获取地点公共记忆、改造、氛围
+    loc_public_memory = loc_info.get("public_memory", [])[-3:]
+    loc_modifications = loc_info.get("modifications", [])
+    loc_vibe = loc_info.get("vibe", "普通")
+    # v9.0: 获取声望信息
+    my_reputation = my_state.get("reputation", {"score": 0, "tags": [], "deeds": []})
+    my_rep_score = my_reputation.get("score", 0)
+    my_rep_tags = my_reputation.get("tags", [])
+    # v9.0: 获取城市传说
+    urban_legends = world.get("urban_legends", [])[-3:]
+    # v9.0: 获取世界改造
+    world_mods = world.get("world_modifications", [])[-5:]
     events_text = "\n".join([f"- {e.get('event', e.get('time',''))}: {e.get('desc','')}" for e in events]) if events else "暂无"
 
     # 情感关系（含印象）
@@ -744,6 +765,17 @@ NPC: {[n.get('name','?') for n in nearby_npcs]}
 {topics_text}
 {moments_text}
 
+=== 这个地方的氛围 ===
+{loc}的氛围: {loc_vibe}
+{chr(10).join([f'- 这里曾经: {m.get("event","")}' for m in loc_public_memory]) if loc_public_memory else '这个地方没有什么特别的历史'}
+{chr(10).join([f'- 这里有: {m.get("name","")}（{m.get("creator_name","")}创建）' for m in loc_modifications]) if loc_modifications else ''}
+
+=== 我的声望 ===
+声望分: {my_rep_score} {'(' + ', '.join(my_rep_tags) + ')' if my_rep_tags else '(还没有什么名声)'}
+
+=== 城市传说 ===
+{chr(10).join([f'- 听说{l.get("original_name","?")}曾经: {l.get("content","")[:50]}' for l in urban_legends]) if urban_legends else '还没有听到什么传说'}
+
 === 近期记忆 ===
 {recent_mem}
 
@@ -776,7 +808,7 @@ NPC: {[n.get('name','?') for n in nearby_npcs]}
 - 你心里有自己想要的东西，让那个方向引导你。
 
 你可以做任何一个真实的人会做的事情，包括但不限于:
-- 吃饭(在当前位置直接吃，不需要移动): 城中村快餐5元、路边摊炒粉12元、便利店饭团8元、奶茶15元、火锅60元
+- 吃饭(在当前位置直接吃，不需要移动): 城中村快餐5元、路边摊炒粉12元、便利店饭团8元、奶茶15元、火锹60元
 - 工作/继续做当前任务
 - 去其他地点(宝安城中村/南山科技园/福田CBD/华强北/东门老街/南山公寓/深圳湾公园)
 - 和附近的人聊天、搭讪、吵架、倾诉
@@ -788,6 +820,7 @@ NPC: {[n.get('name','?') for n in nearby_npcs]}
 - 睡觉(如果很累或很晚了)
 - 和某人发展亲密关系/约会
 - 做任何你想做的事(健身/唱歌/画画/逛街/买东西/学习/写代码/弹吉他/喝咖啡/喝酒/看电影...)
+- 🌟 创造性行动(可以永久改变世界!): 开店摆摊/在墙上涂鸦画画/种树绿化/建书屋/组织活动/教别人技能/创业
 
 格式要求(严格遵守):
 [内心独白] 你的想法...
@@ -803,7 +836,10 @@ NPC: {[n.get('name','?') for n in nearby_npcs]}
 [行动] 去健身锻炼一下
 [行动] 找个地方休息一会
 [行动] 在附近逛逛探索一下环境
-[行动] 睡觉"""
+[行动] 睡觉
+[行动] 在城中村摆一个炒粉摊
+[行动] 在墙上画一幅涂鸦记录今天的心情
+[行动] 教旁边的人弹吉他"""
 
     try:
         resp = client.chat.completions.create(
@@ -1031,7 +1067,7 @@ def reflect(world, my_state, thought, plan, result, recent_msgs, force=False):
 # 启动
 # ============================================================
 if __name__ == "__main__":
-    log.info(f"=== {persona['name']} 的灵魂 v8 已注入 ===")
+    log.info(f"=== {persona['name']} 的灵魂 v9.0 已注入 (自我进化) ===")
     log.info(f"身份: {persona['age']}岁{persona['gender']}，来自{persona['origin']}，{persona['edu']}")
     log.info(f"性格: {persona['personality']}")
     log.info(f"价值观: {persona['values']}")
@@ -1039,7 +1075,7 @@ if __name__ == "__main__":
     log.info(f"习惯: {persona.get('habits', '')}")
     if persona.get("family_info"):
         log.info(f"家庭: {persona['family_info']}")
-    log.info(f"v8.3.2能力: 同步总线/反重复升级/长期目标/双向对话/心流状态/无聊感/认知失调")
+    log.info(f"v9.0能力: 世界改造/地点记忆+声望/代际传承/城市传说")
 
     # 尝试从世界引擎恢复内心状态
     try:
