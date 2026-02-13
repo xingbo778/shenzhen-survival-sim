@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-深圳生存模拟 - 世界引擎 v8
+深圳生存模拟 - 世界引擎 v8.2
 =========================
-v8 新增:
-- 天气系统 (影响行为和情绪)
-- 外部信息注入 (新闻/热搜/八卦)
-- 情绪系统 (五维情绪: 开心/难过/愤怒/焦虑/孤独)
-- 朋友圈系统 (发帖/点赞/评论)
-- 开放式行动框架 (Bot自由描述行为，引擎解释执行)
-- 生活琐事随机事件
-- 修复move解析bug
+v8.2 新增:
+- 寿命系统 (HP→不可逆寿命，饥饿/过劳加速衰老)
+- 固定开销 (每日房租+杂费)
+- 欲望衰减 (超90自动衰减)
+- 世界叙事摘要 (每天22:00生成城市日记)
+- NPC演化 (态度随互动变化)
+- 移动bug修复 (目的地=当前位置时转free)
+v8 原有:
+- 天气/情绪/朋友圈/新闻/开放式行动/随机事件
 """
 
 import os, sys, json, random, time, logging, subprocess
@@ -73,12 +74,24 @@ def grok_generate(prompt: str, save_path: str) -> dict:
 # 常量与配置
 # ============================================================
 
+# --- 寿命系统 (HP→不可逆寿命) ---
+AGING_BASE = 0.02              # 每tick基础衰老 (100寿命 / 0.02 = 5000tick ≈ 208天)
+AGING_HUNGER_MULT = 5.0        # 饥饿时衰老加速倍率
+AGING_OVERWORK_MULT = 3.0      # 过劳时衰老加速倍率
+AGING_SICK_MULT = 2.0          # 生病时衰老加速倍率
+
+# --- 固定开销 ---
+DAILY_RENT = {
+    "宝安城中村": 15,  # 城中村便宜
+    "南山公寓": 50,    # 白领公寓贵
+}
+DAILY_MISC_COST = 5            # 每日杂费
+
 # --- 数值衰减/恢复 ---
-HP_DECAY_PER_TICK = 0          # HP不自然衰减，只有极端情况才掉
-SATIETY_DECAY = 2              # 放缓饥饿（原3）
-ENERGY_DAY_COST = 2            # 放缓能量消耗（原4）
-ENERGY_NIGHT_RECOVER = 5       # 夜间恢复加快
-ENERGY_SLEEP_RECOVER = 15      # 睡眠恢复加快
+SATIETY_DECAY = 2
+ENERGY_DAY_COST = 2
+ENERGY_NIGHT_RECOVER = 5
+ENERGY_SLEEP_RECOVER = 15
 DESIRE_DECAY_ON_FULFILL = 30
 
 # --- 天气系统 ---
@@ -351,7 +364,8 @@ world = {
     "bots": {},
     "locations": {},
     "events": [],          # 世界事件历史
-    "active_effects": [],  # 当前生效的效果
+    "active_effects": [],
+    "world_narrative": "这座城市刚刚苏醒，故事还没有开始。",
     "message_board": [],   # 消息板
     "moments": [],         # 朋友圈 (所有帖子)
     "gallery": [],         # 照片墙
@@ -426,6 +440,7 @@ def init_world():
             world["message_board"] = snap.get("message_board", [])
             world["moments"] = snap.get("moments", [])
             world["gallery"] = snap.get("gallery", [])
+            world["world_narrative"] = snap.get("world_narrative", "")
             world["news_feed"] = snap.get("news_feed", [])
             world["hot_topics"] = snap.get("hot_topics", [])
             world["weather"] = snap.get("weather", world["weather"])
@@ -642,8 +657,26 @@ def world_tick():
                     log.info(f"{bid} 自然醒了 (能量={bot['energy']})")
                 continue
 
-            # === 正常状态 ===
-            bot["hp"] = max(0, bot["hp"] - HP_DECAY_PER_TICK)
+            # === 正常状态: 寿命衰老 ===
+            aging_rate = AGING_BASE
+            # 饥饿加速衰老
+            if bot["satiety"] <= 10:
+                aging_rate *= AGING_HUNGER_MULT
+                if not bot.get("_hunger_warned"):
+                    log.warning(f"⚠️ {bid} 饥饿加速衰老! (x{AGING_HUNGER_MULT})")
+                    bot["_hunger_warned"] = True
+            else:
+                bot["_hunger_warned"] = False
+            # 过劳加速衰老 (能量<10且没睡觉)
+            if bot["energy"] < 10 and not bot.get("is_sleeping", False):
+                aging_rate *= AGING_OVERWORK_MULT
+                if not bot.get("_overwork_warned"):
+                    log.warning(f"⚠️ {bid} 过劳加速衰老! (x{AGING_OVERWORK_MULT})")
+                    bot["_overwork_warned"] = True
+            else:
+                bot["_overwork_warned"] = False
+            bot["hp"] = max(0, round(bot["hp"] - aging_rate, 3))
+            bot["aging_rate"] = round(aging_rate, 4)
             bot["satiety"] = max(0, bot["satiety"] - SATIETY_DECAY)
 
             # 能量
@@ -658,11 +691,11 @@ def world_tick():
             else:
                 bot["phone_battery"] = max(30, bot.get("phone_battery", 100) - random.randint(0, 2))
 
-            # 饥饿惩罚（只有极端情况才触发）
+            # 饥饿惩罚（寿命加速衰老已在上面处理，这里只加情绪影响）
             if bot["satiety"] <= 0:
-                bot["hp"] = max(0, bot["hp"] - 1)
-                emotions["sadness"] = min(100, emotions.get("sadness", 10) + 2)
-                log.warning(f"{bid} 饥饿中，额外扣除1HP！")
+                emotions["sadness"] = min(100, emotions.get("sadness", 10) + 3)
+                emotions["anxiety"] = min(100, emotions.get("anxiety", 20) + 2)
+                log.warning(f"{bid} 饥饿中，加速衰老中!")
 
             # === 情绪自然衰减/增长 ===
             for emo_key, decay in EMOTION_DECAY.items():
@@ -718,7 +751,14 @@ def world_tick():
                         if other.get("gender") and other.get("gender") != gender and other.get("status") == "alive":
                             mult *= 1.3
                             break
-                desires[d_key] = min(100, desires.get(d_key, 20) + base_growth * mult)
+                old_val = desires.get(d_key, 20)
+                # 欲望超90自动衰减，80-90增长变慢
+                if old_val >= 90:
+                    desires[d_key] = max(0, old_val - random.uniform(0.5, 1.5))
+                elif old_val >= 80:
+                    desires[d_key] = min(100, old_val + base_growth * mult * 0.3)
+                else:
+                    desires[d_key] = min(100, old_val + base_growth * mult)
             bot["desires"] = desires
 
             # 死亡检测
@@ -776,9 +816,28 @@ def world_tick():
                 bot["is_sleeping"] = True
                 log.info(f"{bid} 太累了，在{bot['home']}睡着了")
 
-        # 每日HP分配
-        if t["virtual_hour"] == 6 and t["tick"] > 1:
-            distribute_hp(alive_count)
+        # 每日8:00扣除固定开销（房租+杂费）
+        if vh == 8 and t["tick"] > 1:
+            for bid2, bot2 in world["bots"].items():
+                if bot2["status"] != "alive":
+                    continue
+                home = bot2.get("home", "宝安城中村")
+                rent = DAILY_RENT.get(home, 15)
+                total_cost = rent + DAILY_MISC_COST
+                if bot2["money"] >= total_cost:
+                    bot2["money"] -= total_cost
+                    log.info(f"{bid2} 扣除固定开销: 房租{rent}+杂费{DAILY_MISC_COST}={total_cost}元")
+                else:
+                    # 钱不够交租，被驱逐到东门老街
+                    bot2["money"] = 0
+                    if bot2["location"] == home:
+                        old_loc = bot2["location"]
+                        if bid2 in world["locations"][old_loc]["bots"]:
+                            world["locations"][old_loc]["bots"].remove(bid2)
+                        bot2["location"] = "东门老街"
+                        bot2["home"] = "东门老街"  # 无家可归
+                        world["locations"]["东门老街"]["bots"].append(bid2)
+                    log.warning(f"{bid2} 交不起房租，被驱逐到东门老街!")
 
         # 随机事件（提高概率，让环境更活跃）
         event_chance = 0.20 + WEATHER_TYPES.get(world["weather"]["current"], {}).get("event_chance_mod", 0)
@@ -800,20 +859,62 @@ def world_tick():
                             if random.random() < 0.4:  # 40%概率点赞
                                 m["likes"].append(bid)
 
+        # === 世界叙事摘要 (每天22:00生成) ===
+        if vh == 22:
+            _generate_world_narrative(t)
+
+        # === NPC演化 ===
+        for loc_name, loc_data in world["locations"].items():
+            for npc in loc_data.get("npcs", []):
+                interactions = npc.get("interaction_count", 0)
+                if interactions >= 10:
+                    npc["attitude"] = "跟这里的人都混熟了"
+                elif interactions >= 5:
+                    npc["attitude"] = "开始认识常客"
+
         # 清理过期效果
         world["active_effects"] = [e for e in world["active_effects"] if e["expires_tick"] > t["tick"]]
 
         log.info(f'存活Bot数: {alive_count}/{len(world["bots"])}')
 
 
-def distribute_hp(alive_count):
-    hp_pool = max(0, alive_count - 1)
-    if hp_pool <= 0:
-        return
-    alive_bots = [bid for bid, b in world["bots"].items() if b["status"] == "alive"]
-    recipients = random.sample(alive_bots, min(hp_pool, len(alive_bots)))
-    for bid in recipients:
-        world["bots"][bid]["hp"] = min(100, world["bots"][bid]["hp"] + 1)
+# distribute_hp 已移除 - 寿命不可逆
+
+
+def _generate_world_narrative(t):
+    """每天22:00生成世界叙事摘要"""
+    try:
+        day = t["virtual_day"]
+        events_today = [e for e in world["events"] if f"第{day}天" in e.get("time", "")]
+        events_text = "; ".join([e["event"] for e in events_today[-5:]]) if events_today else "平静的一天"
+        
+        bot_summaries = []
+        for bid, bot in world["bots"].items():
+            if bot["status"] != "alive":
+                continue
+            recent = bot.get("action_log", [])[-3:]
+            actions = "; ".join([a.get("plan", "")[:30] for a in recent]) if recent else "无"
+            bot_summaries.append(f"{bot['name']}(HP:{bot['hp']:.1f},¥{bot['money']}): {actions}")
+        
+        prompt = f"""你是深圳这座城市的观察者。今天是模拟世界的第{day}天。
+天气: {world['weather']['current']}
+今天发生的事件: {events_text}
+居民动态:
+{chr(10).join(bot_summaries[:6])}
+
+请用2-3句话写一段"城市日记"，像一个旁观者记录这座城市今天的故事。
+要求：有文学感，关注人物命运，不要列举。只输出日记内容。"""
+        
+        resp = client.chat.completions.create(
+            model="gpt-4.1-nano",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.8, max_tokens=150,
+        )
+        narrative = resp.choices[0].message.content.strip()
+        world["world_narrative"] = narrative
+        log.info(f"📖 世界叙事: {narrative}")
+    except Exception as e:
+        log.error(f"世界叙事生成失败: {e}")
 
 
 def trigger_event():
@@ -985,6 +1086,10 @@ def execute(bot_id, action):
     # === 移动类 ===
     if cat == "move" or act == "move":
         dest = action.get("to", "")
+        if dest in LOCATIONS:
+            if dest == bot["location"]:
+                # 目的地=当前位置，转为自由行动
+                return interpret_free_action(bot_id, bot, desc or f"在{dest}随便逛逛")
         if dest in LOCATIONS and dest != bot["location"]:
             old_loc = bot["location"]
             if bot_id in world["locations"][old_loc]["bots"]:
@@ -1195,7 +1300,13 @@ warmth_delta范围-10到+10，正数表示关系升温，负数表示关系降�
 
         Thread(target=_update_bonds_after_talk, daemon=True).start()
 
-        # === NPC会“回嘴”：用LLM生成NPC的回应 ===
+        # === NPC会"回嘴"：用LLM生成NPC的回应 ===
+        # NPC互动计数（用于NPC演化）
+        if not target.startswith("bot_"):
+            for loc_data in world["locations"].values():
+                for npc in loc_data.get("npcs", []):
+                    if npc.get("name") == target:
+                        npc["interaction_count"] = npc.get("interaction_count", 0) + 1
         npc_reply = ""
         if not target.startswith("bot_"):
             def _generate_npc_reply():
@@ -1628,6 +1739,7 @@ def get_world():
                 "phone_battery": bot.get("phone_battery", 100),
                 "family": bot.get("family", {}),
                 "selfie_count": bot.get("selfie_count", 0),
+                "aging_rate": bot.get("aging_rate", AGING_BASE),
                 "emotional_bonds_summary": {k: {"label": v.get("label", ""), "closeness": v.get("closeness", 0), "latest_impression": (v.get("impressions", []) or [""])[-1]} for k, v in bot.get("emotional_bonds", {}).items()},
             }
         for loc_name, loc_data in world["locations"].items():
@@ -1669,6 +1781,7 @@ def get_bot_detail(bot_id: str):
             "is_sleeping": bot.get("is_sleeping", False),
             "current_task": bot.get("current_task"),
             "selfie_count": bot.get("selfie_count", 0),
+            "aging_rate": bot.get("aging_rate", AGING_BASE),
             "emotions": bot.get("emotions", {}),
             "desires": bot.get("desires", {}),
             "phone_battery": bot.get("phone_battery", 100),
@@ -1774,6 +1887,12 @@ def get_gallery():
         return {"photos": world["gallery"][-30:]}
 
 
+@app.get("/world_narrative")
+def get_world_narrative():
+    with lock:
+        return {"narrative": world.get("world_narrative", "这座城市刚刚苏醒，故事还没有开始。")}
+
+
 @app.post("/admin/save_snapshot")
 async def save_snapshot():
     with lock:
@@ -1787,6 +1906,7 @@ async def save_snapshot():
             "message_board": world["message_board"][-100:],
             "moments": world["moments"][-100:],
             "gallery": world["gallery"],
+            "world_narrative": world.get("world_narrative", ""),
         }
         for bid, bot in world["bots"].items():
             snapshot["bots"][bid] = dict(bot)
@@ -1829,7 +1949,7 @@ def start_tick_loop():
 def on_startup():
     init_world()
     start_tick_loop()
-    log.info("=== 深圳生存模拟 v8 世界引擎启动 ===")
+    log.info("=== 深圳生存模拟 v8.2 世界引擎启动 (寿命系统/房租/欲望衰减/世界叙事) ===")
     # 启动Bot进程
     for bot_id in PERSONAS:
         bot = world["bots"].get(bot_id)

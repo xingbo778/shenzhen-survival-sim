@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-深圳生存模拟 - Bot智能体 v8
-新增:
-- 情绪系统 (开心/难过/愤怒/焦虑/孤独 → 影响决策)
-- 朋友圈行为 (发帖/看帖/评论)
-- 手机/信息消费 (刷新闻/热搜/朋友圈)
-- 天气感知 (天气影响心情和行为)
-- 开放式行动 (free_action, Bot自由发挥)
-- 更丰富的决策prompt
+深圳生存模拟 - Bot智能体 v8.2
+v8.2 新增:
+- 寿命感知 (HP→寿命，衰老警告)
+- 记忆去重 (字符重叠检测)
+- 关系ID规范化 (名字→bot_id映射)
+- 行为多样性 (反重复机制)
+- 世界叙事感知
+v8 原有:
+- 情绪/朋友圈/手机/天气/开放式行动
 """
 
 import os, sys, time, json, logging, re, random
@@ -101,12 +102,38 @@ PERSONAS = {
 
 persona = PERSONAS.get(BOT_ID, PERSONAS["bot_1"])
 
+# === 名字→bot_id映射表 ===
+NAME_TO_ID = {v["name"]: k for k, v in PERSONAS.items()}
+
+def normalize_target_id(name_or_id):
+    """将名字转换为bot_id，已经是bot_id则直接返回"""
+    if name_or_id.startswith("bot_"):
+        return name_or_id
+    return NAME_TO_ID.get(name_or_id, name_or_id)
+
 # ============================================================
 # 记忆系统
 # ============================================================
 memory = []           # 滚动记忆 (最近30条)
 core_memories = []    # 核心记忆 (永不丢失，最多20条)
 inner_thoughts = []   # 内心独白历史
+recent_actions = []   # 最近行动类型（用于反重复）
+
+def is_similar_memory(new_mem, existing_mems, threshold=0.6):
+    """检测新记忆是否与已有记忆重复（字符重叠比）"""
+    new_text = new_mem if isinstance(new_mem, str) else new_mem.get("summary", "")
+    new_chars = set(new_text)
+    if not new_chars:
+        return False
+    for m in existing_mems:
+        old_text = m if isinstance(m, str) else m.get("summary", "")
+        old_chars = set(old_text)
+        if not old_chars:
+            continue
+        overlap = len(new_chars & old_chars) / max(len(new_chars | old_chars), 1)
+        if overlap > threshold:
+            return True
+    return False
 
 # 动态价值观 (会随经历演化)
 dynamic_values = {
@@ -145,11 +172,12 @@ def heartbeat():
             log.error("我已经死了...世界变得一片黑暗。")
             return
 
-        log.info(f"状态: HP={my_state['hp']} 钱={my_state['money']} 能量={my_state['energy']} "
+        aging_rate = my_state.get('aging_rate', 0.02)
+        aging_warn = ' ⚠️加速衰老!' if aging_rate > 0.03 else ''
+        log.info(f"状态: 寿命={my_state['hp']:.1f}/100{aging_warn} 钱={my_state['money']} 能量={my_state['energy']} "
                  f"饱腹={my_state['satiety']} 位置={my_state['location']} "
                  f"睡觉={my_state.get('is_sleeping', False)} "
-                 f"天气={world.get('weather', {}).get('current', '?')} "
-                 f"手机={my_state.get('phone_battery', 100)}%")
+                 f"天气={world.get('weather', {}).get('current', '?')}")
 
         # === 睡眠状态处理 ===
         if my_state.get("is_sleeping", False):
@@ -220,6 +248,10 @@ def heartbeat():
 
         action_record = f"[{world['time']['virtual_datetime']}] 我做了: {plan} -> {result_str}"
         memory.append(action_record)
+        # 记录最近行动类型（用于反重复）
+        recent_actions.append(plan[:20])
+        if len(recent_actions) > 5:
+            recent_actions.pop(0)
 
         # 6. 反思 (入睡时强制触发日终反思)
         is_going_to_sleep = "睡" in result_str or "躺下" in result_str
@@ -229,7 +261,8 @@ def heartbeat():
             memory.pop(0)
 
     except Exception as e:
-        log.error(f"心跳异常: {e}")
+        import traceback
+        log.error(f"心跳异常: {e}\n{traceback.format_exc()}")
 
     # 7. 动态心跳间隔
     interval = calc_interval(my_state)
@@ -240,13 +273,13 @@ def heartbeat():
 def calc_interval(state):
     if not state:
         return 60
-    hp = state.get("hp", 50)
+    lifespan = state.get("hp", 50)
     satiety = state.get("satiety", 50)
     energy = state.get("energy", 50)
     emotions = state.get("emotions", {})
     anxiety = emotions.get("anxiety", 20)
-    # 焦虑的人行动更频繁
-    urgency = (100 - hp) * 0.3 + (100 - satiety) * 0.3 + anxiety * 0.2
+    # 寿命低、饥饿、焦虑时行动更频繁
+    urgency = (100 - lifespan) * 0.2 + (100 - satiety) * 0.3 + anxiety * 0.2
     interval = max(15, 50 - urgency * 0.3)
     return interval
 
@@ -289,6 +322,15 @@ def get_moments_context():
             comments = len(m.get("comments", []))
             lines.append(f"- {m.get('bot_name','?')}: \"{m.get('content','')[:40]}\" ({likes}赞 {comments}评)")
         return "\n".join(lines)
+    except:
+        return ""
+
+
+def get_world_narrative():
+    """获取世界叙事摘要"""
+    try:
+        resp = requests.get(f"{WORLD_URL}/world_narrative", timeout=5)
+        return resp.json().get("narrative", "")
     except:
         return ""
 
@@ -428,10 +470,21 @@ def think_and_plan(world, my_state, recent_msgs, high_priority_msgs, moments_con
     elif 20 <= vh < 22:
         time_context = "🌃 晚上了，可以放松一下。"
 
+    # === 寿命警告 ===
+    lifespan = my_state['hp']
+    aging_rate = my_state.get('aging_rate', 0.02)
+    lifespan_warning = ""
+    if lifespan < 30:
+        lifespan_warning = f"\n⚠️⚠️⚠️ 你的寿命只剩{lifespan:.1f}！你感到身体在走向衰竭。每一个决定都很重要。"
+    elif lifespan < 60:
+        lifespan_warning = f"\n⚠️ 你的寿命已降到{lifespan:.1f}。你开始感受到岁月的侵蚀。"
+    if aging_rate > 0.05:
+        lifespan_warning += f"\n⚠️ 你正在加速衰老（衰老速度x{aging_rate/0.02:.1f}）！饱腹度和休息很重要！"
+
     # === 饥饿警告 ===
     satiety = my_state['satiety']
     if satiety <= 0:
-        hunger_warning = "\n⚠️⚠️⚠️ 你快饿死了！饱腹度为0，每回合额外扣HP！你应该立刻吃东西！在当前位置就能直接吃饭，不需要去餐馆。"
+        hunger_warning = "\n⚠️⚠️⚠️ 你快饿死了！饱腹度为0，正在加速衰老！你应该立刻吃东西！在当前位置就能直接吃饭。"
     elif satiety <= 20:
         hunger_warning = "\n⚠️ 你很饿了，应该尽快吃点东西。在当前位置就能直接吃饭。"
     else:
@@ -480,7 +533,8 @@ def think_and_plan(world, my_state, recent_msgs, high_priority_msgs, moments_con
 {time_context}
 {weather_hint}
 位置: {loc}
-HP: {my_state['hp']}/100  金钱: {my_state['money']}元  能量: {my_state['energy']}/100  饱腹度: {my_state['satiety']}/100
+寿命: {my_state['hp']:.1f}/100 (不可恢复，归零即死)  金钱: {my_state['money']}元  能量: {my_state['energy']}/100  饱腹度: {my_state['satiety']}/100
+{lifespan_warning}
 {hunger_warning}
 技能: {my_state['skills']}
 物品: {my_state['inventory']}
@@ -519,12 +573,19 @@ NPC: {[n.get('name','?') for n in nearby_npcs]}
 === 最近的城市事件 ===
 {events_text}
 
+=== 城市日记 ===
+{get_world_narrative()}
+
+=== 你最近的行动(避免重复) ===
+{', '.join(recent_actions[-3:]) if recent_actions else '无'}
+
 请你以{persona['name']}的第一人称视角，先进行一段内心独白(2-4句话，体现你的性格、情绪和当前处境)，然后做出一个行动决策。
 
 重要约束：
 - 基于你的实际记忆和状态来做决策，不要编造没发生过的经历。
 - 你是一个有个性的真实的人，按照你的性格、情绪和欲望自由行动。
-- 如果你真的想连续做同一件事（比如连续画三幅画），那就去做。专注和痴迷也是人的一部分。
+- 寿命不可恢复！饥饿和过劳会加速衰老。注意吃饭和休息。
+- 尽量不要连续重复同一种行动，你是一个活生生的人，不是机器。
 - 你的行动应该被你的内心驱动，而不是被规则约束。
 
 你可以做任何一个真实的人会做的事情，包括但不限于:
@@ -688,20 +749,25 @@ def reflect(world, my_state, thought, plan, result, recent_msgs, force=False):
             })
             log.warning(f"[价值观变化] {old_values[:30]}... -> {updates['values_update'][:30]}...")
 
-        # 添加核心记忆
+        # 添加核心记忆（去重）
         new_core = updates.get("new_core_memory")
         if new_core and new_core != "null":
-            emotion = updates.get("memory_emotion", "neutral")
-            core_mem = {
-                "summary": new_core,
-                "emotion": emotion,
-                "tick": world["time"]["tick"],
-                "time": world["time"]["virtual_datetime"],
-            }
-            core_memories.append(core_mem)
-            if len(core_memories) > 20:
-                core_memories.pop(0)
-            log.warning(f"[核心记忆] ⭐ {new_core} ({emotion})")
+            # 检查是否与已有记忆重复
+            if is_similar_memory(new_core, core_memories):
+                log.info(f"[跳过重复记忆] {new_core[:40]}")
+                new_core = None
+            else:
+                emotion = updates.get("memory_emotion", "neutral")
+                core_mem = {
+                    "summary": new_core,
+                    "emotion": emotion,
+                    "tick": world["time"]["tick"],
+                    "time": world["time"]["virtual_datetime"],
+                }
+                core_memories.append(core_mem)
+                if len(core_memories) > 20:
+                    core_memories.pop(0)
+                log.warning(f"[核心记忆] ⭐ {new_core} ({emotion})")
 
         # 更新情绪
         emo_update = updates.get("emotion_update", {})
@@ -717,13 +783,15 @@ def reflect(world, my_state, thought, plan, result, recent_msgs, force=False):
             except:
                 pass
 
-        # 更新情感关系
+        # 更新情感关系（关系ID规范化）
         bond_updates = updates.get("bond_updates", {})
         if bond_updates:
             for target, deltas in bond_updates.items():
                 # 过滤无效target
                 if target in ("bot_X", "填入具体的bot_ID或NPC名字", "") or not isinstance(deltas, dict):
                     continue
+                # 规范化：名字→bot_id
+                target = normalize_target_id(target)
                 if target not in emotional_bonds:
                     emotional_bonds[target] = {"trust": 50, "hostility": 0, "closeness": 0, "label": "陌生人"}
                 bond = emotional_bonds[target]
@@ -770,7 +838,7 @@ if __name__ == "__main__":
     log.info(f"习惯: {persona.get('habits', '')}")
     if persona.get("family_info"):
         log.info(f"家庭: {persona['family_info']}")
-    log.info(f"v8能力: 情绪系统, 朋友圈, 手机/信息消费, 天气感知, 开放式行动")
+    log.info(f"v8.2能力: 寿命系统/记忆去重/关系ID规范/行为多样性/世界叙事")
 
     # 尝试从世界引擎恢复内心状态
     try:
