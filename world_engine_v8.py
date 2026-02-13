@@ -799,166 +799,88 @@ def trigger_event():
 # ============================================================
 # 开放式动作解释与执行
 # ============================================================
-def _keyword_parse(plan, bot, loc):
-    """第一层：关键词规则匹配，快速准确地将自然语言计划映射到action"""
-    p = plan.lower()
-
-    # --- 睡觉/起床 ---
-    if any(k in p for k in ["睡觉", "睡了", "躺下", "入睡", "回去睡"]):
-        return {"action": "sleep"}
-    if any(k in p for k in ["起床", "醒来", "起来了"]):
-        return {"action": "wake_up"}
-
-    # --- 吃东西 (最高优先级) ---
-    eat_kw = ["吃", "饭", "食物", "填饱", "买吃的", "补充饱腹", "喝奶茶", "泡面",
-              "快餐", "炒粉", "烧烤", "外卖", "便当", "面包", "早餐", "午餐", "晚餐",
-              "宵夜", "小吃", "饿", "觅食", "果腹", "充饥"]
-    if any(k in p for k in eat_kw):
-        # 尝试提取食物名
-        food_names = list(FOOD_MENU.keys())
-        food = next((f for f in food_names if f in plan), "城中村快餐")
-        return {"action": "eat", "food": food}
-
-    # --- 工作 ---
-    work_kw = ["工作", "干活", "赚钱", "上班", "继续做", "找工作", "投简历",
-               "面试", "打工", "搬砖", "送外卖", "做任务"]
-    if any(k in p for k in work_kw):
-        jobs = JOBS.get(loc, [])
-        job_title = jobs[0]["title"] if jobs else ""
-        return {"action": "work", "job": job_title}
-
-    # --- 发朋友圈 ---
-    moment_kw = ["发朋友圈", "发帖", "晒", "发个朋友圈", "记录一下", "分享到朋友圈"]
-    if any(k in p for k in moment_kw):
-        return {"action": "post_moment", "content": plan, "mood": "neutral"}
-
-    # --- 刷手机 ---
-    phone_kw = ["刷手机", "看新闻", "刷朋友圈", "看热搜", "上网", "刷抖音",
-                "看视频", "刷微博", "玩手机", "看手机"]
-    if any(k in p for k in phone_kw):
-        focus = "news" if any(k in p for k in ["新闻", "热搜"]) else "moments"
-        return {"action": "browse_phone", "focus": focus}
-
-    # --- 拍照/自拍 ---
-    if any(k in p for k in ["拍照", "自拍", "selfie", "拍个照", "记录风景", "拍一张"]):
-        return {"action": "selfie", "prompt": f"A person taking a selfie in {loc}, Shenzhen"}
-
-    # --- 社交/聊天 ---
-    talk_kw = ["聊天", "打招呼", "打电话", "发微信", "倾诉", "吐槽", "搭讪",
-               "问问", "打听", "交流", "认识一下"]
-    if any(k in p for k in talk_kw):
-        # 需要LLM帮忙提取target和message
-        return None  # fallback到LLM
-
-    # --- 亲密关系 ---
-    if any(k in p for k in ["亲密", "发展关系", "在一起", "约会", "牵手", "拥抱"]):
-        return None  # 需要LLM提取target
-
-    # --- 移动 ---
-    move_kw = ["去", "前往", "出发", "移动到", "赶到", "走到"]
-    if any(k in p for k in move_kw):
-        # 检查是否提到了具体地点
-        for loc_name in LOCATIONS:
-            if loc_name in plan:
-                if loc_name == loc:
-                    # 已经在这了，解析为explore
-                    return {"action": "explore"}
-                return {"action": "move", "to": loc_name}
-        # 没有匹配到具体地点，可能是"去附近小摊"这种
-        # 看看是否包含吃/工作等意图
-        if any(k in p for k in ["吃", "餐", "摊", "饭"]):
-            return {"action": "eat", "food": "城中村快餐"}
-        if any(k in p for k in ["工作", "上班", "招聘"]):
-            jobs = JOBS.get(loc, [])
-            return {"action": "work", "job": jobs[0]["title"] if jobs else ""}
-        return {"action": "explore"}
-
-    # --- 休息 ---
-    if any(k in p for k in ["休息", "歇一会", "躺一会", "放松", "恢复"]):
-        return {"action": "rest"}
-
-    # --- 探索 ---
-    if any(k in p for k in ["逛逛", "探索", "四处看看", "熟悉环境", "走走", "散步", "溜达"]):
-        return {"action": "explore"}
-
-    # --- 出卖身体 ---
-    if any(k in p for k in ["出卖", "卖身", "陪伴服务"]):
-        return {"action": "sell_body", "want": "money"}
-
-    # --- 寻欢 ---
-    if any(k in p for k in ["寻欢", "消遣", "找乐子"]):
-        return {"action": "seek_pleasure"}
-
-    # --- 通用自由行动（健身、唱歌、画画、买东西等）---
-    free_kw = {"leisure": ["逛街", "喝咖啡", "喝酒", "唱歌", "听音乐", "看电影", "发呆", "看海",
-                          "咖啡馆", "酒吧", "喝茶", "散心", "放风筝", "铓鱼", "打牌", "下棋"],
-               "creative": ["画画", "写歌", "写作", "拍视频", "创作", "设计",
-                            "画板", "画笔", "写日记", "弹吉他", "弹琴", "乐器",
-                            "录制", "写代码", "编程", "vlog", "直播"],
-               "exercise": ["健身", "跑步", "运动", "锻炼", "打球", "游泳", "爷山"],
-               "shopping": ["买", "购物", "逛商场", "买东西", "逛店", "文艺小店"],
-               "learning": ["学习", "看书", "读书", "研究", "练习", "整理笔记", "整理想法"],
-               "other": ["整理", "打扫", "收拾", "准备", "开门", "迎客", "做饭", "买菜"]}
-    for cat, kws in free_kw.items():
-        if any(k in p for k in kws):
-            return {"action": "free_action", "desc": plan, "category": cat}
-
-    return None  # 无法匹配，fallback到LLM
-
-
 def process_action(bot_id, plan):
+    """一层LLM解析：用gpt-4.1-mini将自然语言计划映射到JSON action"""
     bot = world["bots"][bot_id]
     loc = bot["location"]
     loc_info = world["locations"][loc]
 
-    # 第一层：关键词规则匹配（快速、准确）
-    action = _keyword_parse(plan, bot, loc)
+    nearby_bots = [b for b in loc_info["bots"] if b != bot_id]
+    nearby_bot_info = []
+    for nb in nearby_bots[:5]:
+        ob = world["bots"].get(nb, {})
+        nearby_bot_info.append(f"{nb}({ob.get('name','?')},{ob.get('gender','?')})")
 
-    # 第二层：LLM解析（只处理规则无法匹配的复杂情况）
-    if action is None:
-        nearby_bots = [b for b in loc_info["bots"] if b != bot_id]
-        nearby_bot_info = []
-        for nb in nearby_bots[:5]:
-            ob = world["bots"].get(nb, {})
-            nearby_bot_info.append(f"{nb}({ob.get('name','?')},{ob.get('gender','?')})")
+    food_list = ', '.join([f'{k}({v["cost"]}元)' for k, v in FOOD_MENU.items()])
+    job_list = ', '.join([j['title'] for j in JOBS.get(loc, [])])
+    all_locs = list(LOCATIONS.keys())
 
-        context = f"""当前地点: {loc}
-附近的人: {nearby_bot_info}
-附近的NPC: {[n['name'] for n in loc_info['npcs']]}
-所有地点: {list(LOCATIONS.keys())}"""
+    prompt = f"""你是一个JSON转换器。将用户的自然语言计划转为一个JSON动作对象。只输出JSON，不要任何其他文字。
 
-        prompt = f"""将以下计划转为一个JSON动作。只输出JSON，不要其他文字。
+## 上下文
+- 当前地点: {loc}
+- 附近的人: {nearby_bot_info if nearby_bot_info else '无'}
+- 附近的NPC: {[n['name'] for n in loc_info['npcs']]}
+- 所有可去地点: {all_locs}
+- 当前地点可用工作: {job_list if job_list else '无'}
+- 可选食物: {food_list}
 
-可用动作:
-- {{"action":"talk","target":"bot_X或npc名","message":"说的话"}}
-- {{"action":"intimate","target":"bot_X"}}
-- {{"action":"trade","target":"bot_X","give_type":"money","give_amount":数字,"want_type":"money","want_amount":数字}}
-- {{"action":"free_action","desc":"具体描述","category":"leisure/creative/exercise/shopping/learning/other"}}
+## 可用动作（选择最匹配的一个）
+1. 吃东西: {{"action":"eat","food":"食物名"}}
+   食物名必须是: {list(FOOD_MENU.keys())}
+2. 工作: {{"action":"work","job":"职位名"}}
+3. 移动: {{"action":"move","to":"目的地名"}}
+   目的地必须是: {all_locs}
+4. 聊天: {{"action":"talk","target":"bot_X或npc名","message":"说的话"}}
+5. 发朋友圈: {{"action":"post_moment","content":"朋友圈内容","mood":"happy/sad/neutral/angry"}}
+6. 刷手机: {{"action":"browse_phone","focus":"news/moments/hot"}}
+7. 拍照: {{"action":"selfie","prompt":"英文拍照场景描述"}}
+8. 休息: {{"action":"rest"}}
+9. 探索: {{"action":"explore"}}
+10. 睡觉: {{"action":"sleep"}}
+11. 起床: {{"action":"wake_up"}}
+12. 亲密: {{"action":"intimate","target":"bot_X"}}
+13. 交易: {{"action":"trade","target":"bot_X","give_type":"money","give_amount":数字,"want_type":"money","want_amount":数字}}
+14. 出卖身体: {{"action":"sell_body","want":"money/food"}}
+15. 寻欢: {{"action":"seek_pleasure"}}
+16. 自由行动(以上都不匹配时): {{"action":"free_action","desc":"具体描述","category":"leisure/creative/exercise/shopping/learning/other"}}
 
-{context}
+## 规则
+- 如果计划提到去某个地点且不是当前地点，用move
+- 如果计划提到去某个地点且就是当前地点，用explore
+- 如果计划同时包含"去某地"和"做某事"，优先用move（到了再做事）
+- 如果计划提到吃/喝/食物，用eat，选最接近的食物名
+- 如果计划提到工作/赚钱/送外卖等，用work
+- 如果计划提到发朋友圈/晒/分享，用post_moment
+- 如果计划提到刷手机/看新闻/看热搜，用browse_phone
+- 如果计划提到拍照/自拍/拍视频，用selfie
+- 如果计划提到和某人聊天/搭讪/交流，用talk
+- 如果以上都不匹配，用free_action
 
-计划: "{plan}"
+## 计划
+"{plan}"
 
-JSON:"""
+## JSON
+"""
 
-        try:
-            resp = client.chat.completions.create(
-                model="gpt-4.1-nano",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.0, max_tokens=200,
-            )
-            raw = resp.choices[0].message.content.strip()
-            if raw.startswith("```"):
-                raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-            # 提取第一个JSON对象
-            start = raw.find("{")
-            end = raw.rfind("}") + 1
-            if start >= 0 and end > start:
-                raw = raw[start:end]
-            action = json.loads(raw)
-        except Exception as e:
-            log.error(f"LLM解析 {bot_id} 动作失败: {e}")
-            action = {"action": "free_action", "desc": plan, "category": "other"}
+    try:
+        resp = client.chat.completions.create(
+            model="gpt-4.1-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.0, max_tokens=200,
+        )
+        raw = resp.choices[0].message.content.strip()
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+        # 提取第一个JSON对象
+        start = raw.find("{")
+        end = raw.rfind("}") + 1
+        if start >= 0 and end > start:
+            raw = raw[start:end]
+        action = json.loads(raw)
+    except Exception as e:
+        log.error(f"LLM解析 {bot_id} 动作失败: {e}")
+        action = {"action": "free_action", "desc": plan, "category": "other"}
 
     result = execute(bot_id, action)
     bot["action_log"].append({
