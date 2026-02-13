@@ -324,6 +324,27 @@ body { font-family: 'SF Pro Display', -apple-system, 'PingFang SC', sans-serif; 
 
 /* Action log */
 .action-log-item { font-size: 10px; color: #888; padding: 3px 6px; border-left: 2px solid rgba(77,150,255,0.2); margin: 3px 0; }
+.action-log-item .plan { color: #4d96ff; }
+.action-log-item .result { color: #6bcb77; }
+.action-log-item .time { color: #555; font-size: 9px; }
+
+/* Event stream */
+.event-stream { flex: 1; overflow-y: auto; padding: 8px; display: none; }
+.event-card { background: rgba(20,20,30,0.6); border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; padding: 10px; margin-bottom: 8px; }
+.event-card.relationship { border-left: 3px solid #ff6b9d; }
+.event-card.npc-reply { border-left: 3px solid #ffd93d; }
+.event-card.world-event { border-left: 3px solid #4d96ff; }
+.event-card.moment { border-left: 3px solid #e040fb; }
+.event-card .event-type { font-size: 9px; color: #666; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 1px; }
+.event-card .event-body { font-size: 12px; color: #ccc; line-height: 1.6; }
+.event-card .event-time { font-size: 9px; color: #444; margin-top: 4px; }
+
+/* Bond impression in detail */
+.bond-impression { font-size: 10px; color: #aaa; font-style: italic; padding: 4px 8px; background: rgba(0,0,0,0.1); border-radius: 4px; margin-top: 4px; }
+
+/* Bot card relationship tags */
+.bot-card .bond-tags { display: flex; flex-wrap: wrap; gap: 2px; margin-top: 3px; }
+.bot-card .bond-tag { font-size: 7px; padding: 1px 4px; border-radius: 3px; background: rgba(255,107,157,0.15); color: #ff6b9d; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100px; }
 
 /* ===== TOAST ===== */
 .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%) translateY(80px); padding: 10px 24px; border-radius: 8px; font-size: 12px; background: rgba(30,30,45,0.95); border: 1px solid rgba(255,255,255,0.1); color: #e0e0e0; transition: transform 0.3s; z-index: 300; pointer-events: none; }
@@ -373,6 +394,7 @@ body { font-family: 'SF Pro Display', -apple-system, 'PingFang SC', sans-serif; 
     <div class="right-panel">
         <div class="log-tabs" id="logTabs">
             <div class="log-tab active" data-log="world_engine" onclick="switchLog('world_engine', this)">🌍 世界</div>
+            <div class="log-tab" onclick="switchView('events')">📖 事件流</div>
         </div>
         <div class="view-toggle" id="viewToggle">
             <button class="view-btn active" id="btnLogView" onclick="setContentView('log')">📋 日志</button>
@@ -382,6 +404,7 @@ body { font-family: 'SF Pro Display', -apple-system, 'PingFang SC', sans-serif; 
         <div class="chat-content" id="chatContent"></div>
         <div class="moments-content" id="momentsContent"></div>
         <div class="gallery-content" id="galleryContent"></div>
+        <div class="event-stream" id="eventStream"></div>
         <div class="msg-bar" id="msgBar">
             <select class="sender-select" id="senderAlias">
                 <option value="一个路人">路人</option>
@@ -587,10 +610,9 @@ function initTabs() {
 
 // ===== VIEW SWITCHING =====
 function hideAllContent() {
-    ['logContent','chatContent','momentsContent','galleryContent'].forEach(id => {
+    ['logContent','chatContent','momentsContent','galleryContent','eventStream'].forEach(id => {
         const el = document.getElementById(id);
-        el.style.display = 'none';
-        el.classList.remove('visible');
+        if (el) { el.style.display = 'none'; el.classList.remove('visible'); }
     });
 }
 
@@ -609,6 +631,9 @@ function switchView(view) {
         g.style.display = 'flex';
         g.classList.add('visible');
         fetchGallery();
+    } else if (view === 'events') {
+        document.getElementById('eventStream').style.display = 'block';
+        fetchEvents();
     }
 }
 
@@ -753,6 +778,37 @@ async function fetchGallery() {
     } catch(e){}
 }
 
+async function fetchEvents() {
+    try {
+        const resp = await fetch('/api/logs/world_engine');
+        const data = await resp.json();
+        const lines = data.lines || [];
+        const events = [];
+        for (const line of lines) {
+            const l = line.trim();
+            if (l.includes('关系更新') || l.includes('印象')) {
+                events.push({type:'relationship', icon:'💕', label:'关系变化', body:l});
+            } else if (l.includes('回应') || l.includes('NPC')) {
+                events.push({type:'npc-reply', icon:'🗣️', label:'NPC回应', body:l});
+            } else if (l.includes('发了条朋友圈') || l.includes('[朋友圈]')) {
+                events.push({type:'moment', icon:'💬', label:'朋友圈', body:l});
+            } else if (l.includes('随机事件') || l.includes('突发') || l.includes('发现了')) {
+                events.push({type:'world-event', icon:'🎲', label:'世界事件', body:l});
+            } else if (l.includes('对') && l.includes('说:')) {
+                events.push({type:'npc-reply', icon:'💬', label:'对话', body:l});
+            }
+        }
+        const c = document.getElementById('eventStream');
+        if (events.length === 0) {
+            c.innerHTML = '<div style="text-align:center;color:#444;padding:40px;font-size:12px;">📖 还没有发生有趣的事件</div>';
+            return;
+        }
+        c.innerHTML = events.reverse().slice(0, 50).map(e =>
+            '<div class="event-card '+e.type+'"><div class="event-type">'+e.icon+' '+e.label+'</div><div class="event-body">'+e.body.replace(/</g,'&lt;')+'</div></div>'
+        ).join('');
+    } catch(e){}
+}
+
 async function fetchWorld() {
     try {
         const resp = await fetch('/api/world');
@@ -852,6 +908,26 @@ async function fetchWorld() {
                     } else if (task && task.status==='completed') {
                         taskBadge.textContent = '✅'; taskBadge.style.color='#6bcb77';
                     } else { taskBadge.textContent = ''; }
+                }
+            }
+        }
+        // Update bond tags on cards from each bot's emotional_bonds_summary
+        if (worldState.bots) {
+            for (const [botId, bot] of Object.entries(worldState.bots)) {
+                const bonds = bot.emotional_bonds_summary || {};
+                const card = document.getElementById('card-'+botId);
+                if (!card) continue;
+                let tagsEl = card.querySelector('.bond-tags');
+                if (!tagsEl) { tagsEl = document.createElement('div'); tagsEl.className='bond-tags'; card.appendChild(tagsEl); }
+                const entries = Object.entries(bonds);
+                if (entries.length > 0) {
+                    tagsEl.innerHTML = entries.slice(0,3).map(([target, info]) => {
+                        const name = getBotName(target) || target;
+                        const label = info.label || '认识';
+                        return '<span class="bond-tag">'+name+': '+label+'</span>';
+                    }).join('');
+                } else {
+                    tagsEl.innerHTML = '';
                 }
             }
         }
@@ -963,6 +1039,11 @@ async function showDetail(botId) {
             html += '<div class="bond-bar"><span style="min-width:30px;color:#4d96ff;">亲密</span><div class="bar"><div class="bar-fill" style="width:'+(b.closeness||0)+'%;background:#4d96ff"></div></div><span>'+(b.closeness||0)+'</span></div>';
             html += '<div class="bond-bar"><span style="min-width:30px;color:#ff4444;">敌意</span><div class="bar"><div class="bar-fill" style="width:'+(b.hostility||0)+'%;background:#ff4444"></div></div><span>'+(b.hostility||0)+'</span></div>';
             html += '</div></div>';
+            // Show impressions
+            const imps = b.impressions || [];
+            if (imps.length > 0) {
+                html += '<div class="bond-impression">💭 ' + imps.slice(-2).join(' → ') + '</div>';
+            }
         });
         html += '</div>';
 
@@ -1070,6 +1151,7 @@ setInterval(() => {
     else if (currentView==='chat') fetchChat();
     else if (currentView==='moments') fetchMoments();
     else if (currentView==='gallery') fetchGallery();
+    else if (currentView==='events') fetchEvents();
 }, 3000);
 setInterval(fetchWorld, 3000);
 fetchLog(); fetchWorld();

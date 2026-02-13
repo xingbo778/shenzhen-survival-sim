@@ -58,6 +58,8 @@ def grok_generate(prompt: str, save_path: str) -> dict:
             timeout=120,
         )
         data = resp.json()
+        if "data" not in data or not data["data"]:
+            return {"success": False, "error": f"API响应异常: {json.dumps(data, ensure_ascii=False)[:200]}"}
         url = data["data"][0]["url"]
         img = req.get(url, timeout=60)
         with open(save_path, "wb") as f:
@@ -1092,6 +1094,163 @@ def execute(bot_id, action):
         bot["emotions"] = emotions
         msg = f"对{target}说: {message}"
         log.info(f"{bot_id}: {msg}")
+
+        # === 互动后更新双方关系记忆 ===
+        def _update_bonds_after_talk():
+            try:
+                bot_name = bot.get("name", bot_id)
+                # 确定对方信息
+                if target.startswith("bot_") and target in world["bots"]:
+                    target_bot = world["bots"][target]
+                    target_name = target_bot.get("name", target)
+                    target_personality = target_bot.get("personality", "")
+                else:
+                    # NPC
+                    target_name = target
+                    target_personality = ""
+                    for loc_data in world["locations"].values():
+                        for npc in loc_data.get("npcs", []):
+                            if npc.get("name") == target:
+                                target_personality = npc.get("personality", npc.get("desc", ""))
+                                break
+
+                # 获取双方之前的互动历史
+                prev_interactions = []
+                for entry in bot.get("action_log", [])[-20:]:
+                    entry_str = str(entry.get("result", "")) + str(entry.get("plan", ""))
+                    if target_name in entry_str or target in entry_str:
+                        prev_interactions.append(entry_str[:80])
+                history_text = "\n".join(prev_interactions[-5:]) if prev_interactions else "这是第一次互动"
+
+                bond_prompt = f"""两个人刚刚进行了一次对话。请判断这次互动给双方留下了什么印象。
+
+{bot_name}对{target_name}说: "{message}"
+
+{bot_name}的性格: {bot.get('personality', '未知')}
+{target_name}的性格: {target_personality or '未知'}
+
+之前的互动历史:
+{history_text}
+
+请用JSON格式输出双方的印象变化:
+{{
+  "initiator_impression": "一句话描述{bot_name}对{target_name}的新印象(自然语言，像日记一样)",
+  "target_impression": "一句话描述{target_name}对{bot_name}的新印象",
+  "relationship_type": "朋友/同事/合作伙伴/竞争对手/暧昧/陌生人/家人/师徒/邻居",
+  "warmth_delta": 0
+}}
+
+warmth_delta范围-10到+10，正数表示关系升温，负数表示关系降温。
+只输出JSON。"""
+
+                resp = client.chat.completions.create(
+                    model="gpt-4.1-nano",
+                    messages=[{"role": "user", "content": bond_prompt}],
+                    temperature=0.4, max_tokens=200,
+                )
+                raw = resp.choices[0].message.content.strip()
+                if raw.startswith("```"): raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+                start = raw.find("{")
+                end = raw.rfind("}") + 1
+                if start >= 0 and end > start:
+                    raw = raw[start:end]
+                bond_data = json.loads(raw)
+
+                # 更新发起者的bonds
+                if "emotional_bonds" not in bot:
+                    bot["emotional_bonds"] = {}
+                bond_key = target if target.startswith("bot_") else target_name
+                if bond_key not in bot["emotional_bonds"]:
+                    bot["emotional_bonds"][bond_key] = {"trust": 50, "closeness": 0, "hostility": 0, "label": "陌生人", "impressions": []}
+                b = bot["emotional_bonds"][bond_key]
+                impression = bond_data.get("initiator_impression", "")
+                if impression:
+                    b["impressions"] = (b.get("impressions", []) + [impression])[-5:]  # 保留最近5条印象
+                b["label"] = bond_data.get("relationship_type", b.get("label", "陌生人"))
+                warmth = bond_data.get("warmth_delta", 0)
+                b["closeness"] = max(0, min(100, b.get("closeness", 0) + max(0, warmth)))
+                b["hostility"] = max(0, min(100, b.get("hostility", 0) + max(0, -warmth)))
+                b["trust"] = max(0, min(100, b.get("trust", 50) + warmth // 2))
+                log.info(f"[关系更新] {bot_id}->{bond_key}: {impression} (warmth={warmth}, label={b['label']})")
+
+                # 更新对方的bonds（如果是bot）
+                if target.startswith("bot_") and target in world["bots"]:
+                    target_bot = world["bots"][target]
+                    if "emotional_bonds" not in target_bot:
+                        target_bot["emotional_bonds"] = {}
+                    if bot_id not in target_bot["emotional_bonds"]:
+                        target_bot["emotional_bonds"][bot_id] = {"trust": 50, "closeness": 0, "hostility": 0, "label": "陌生人", "impressions": []}
+                    tb = target_bot["emotional_bonds"][bot_id]
+                    t_impression = bond_data.get("target_impression", "")
+                    if t_impression:
+                        tb["impressions"] = (tb.get("impressions", []) + [t_impression])[-5:]
+                    tb["label"] = bond_data.get("relationship_type", tb.get("label", "陌生人"))
+                    tb["closeness"] = max(0, min(100, tb.get("closeness", 0) + max(0, warmth)))
+                    tb["hostility"] = max(0, min(100, tb.get("hostility", 0) + max(0, -warmth)))
+                    tb["trust"] = max(0, min(100, tb.get("trust", 50) + warmth // 2))
+                    log.info(f"[关系更新] {target}->{bot_id}: {t_impression}")
+
+            except Exception as e:
+                log.error(f"[关系更新失败] {bot_id}->{target}: {e}")
+
+        Thread(target=_update_bonds_after_talk, daemon=True).start()
+
+        # === NPC会“回嘴”：用LLM生成NPC的回应 ===
+        npc_reply = ""
+        if not target.startswith("bot_"):
+            def _generate_npc_reply():
+                try:
+                    # 找到NPC信息
+                    npc_info = None
+                    for loc_data in world["locations"].values():
+                        for npc in loc_data.get("npcs", []):
+                            if npc.get("name") == target:
+                                npc_info = npc
+                                break
+                    npc_desc = npc_info.get("desc", "") if npc_info else ""
+                    npc_personality = npc_info.get("personality", npc_desc) if npc_info else target
+
+                    # 获取之前的互动历史
+                    prev = []
+                    for entry in bot.get("action_log", [])[-20:]:
+                        r = str(entry.get("result", ""))
+                        if target in r:
+                            prev.append(r[:80])
+                    history = "\n".join(prev[-5:]) if prev else "这是他们第一次聊天"
+
+                    npc_prompt = f"""你是{target}，一个深圳的NPC。
+你的身份: {npc_personality}
+
+有人对你说: "{message}"
+说话的人是{bot.get('name', bot_id)}。
+
+你们之前的互动:
+{history}
+
+请用一句话回应，符合你的身份和性格。考虑之前的互动历史，不要每次都像第一次见面。
+只输出回应内容，不要加任何前缀。"""
+
+                    resp = client.chat.completions.create(
+                        model="gpt-4.1-nano",
+                        messages=[{"role": "user", "content": npc_prompt}],
+                        temperature=0.7, max_tokens=80,
+                    )
+                    reply = resp.choices[0].message.content.strip().strip('"')
+                    # 把NPC回应写入消息板
+                    world["message_board"].append({
+                        "tick": world["time"]["tick"],
+                        "time": world["time"]["virtual_datetime"],
+                        "from": target,
+                        "to": bot_id,
+                        "msg": reply,
+                        "priority": "normal"
+                    })
+                    log.info(f"[NPC回应] {target}对{bot_id}说: {reply}")
+                except Exception as e:
+                    log.error(f"[NPC回应失败] {target}: {e}")
+
+            Thread(target=_generate_npc_reply, daemon=True).start()
+
         return msg
 
     elif act == "rest":
@@ -1469,6 +1628,7 @@ def get_world():
                 "phone_battery": bot.get("phone_battery", 100),
                 "family": bot.get("family", {}),
                 "selfie_count": bot.get("selfie_count", 0),
+                "emotional_bonds_summary": {k: {"label": v.get("label", ""), "closeness": v.get("closeness", 0), "latest_impression": (v.get("impressions", []) or [""])[-1]} for k, v in bot.get("emotional_bonds", {}).items()},
             }
         for loc_name, loc_data in world["locations"].items():
             safe["locations"][loc_name] = {

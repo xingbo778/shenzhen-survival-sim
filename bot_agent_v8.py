@@ -316,7 +316,7 @@ def think_and_plan(world, my_state, recent_msgs, high_priority_msgs, moments_con
     events = world.get("events", [])[-3:]
     events_text = "\n".join([f"- {e['event']}: {e['desc']}" for e in events]) if events else "暂无"
 
-    # 情感关系
+    # 情感关系（含印象）
     bonds_text = ""
     if emotional_bonds:
         bond_lines = []
@@ -324,10 +324,29 @@ def think_and_plan(world, my_state, recent_msgs, high_priority_msgs, moments_con
             label = bond.get("label", "认识的人")
             trust = bond.get("trust", 50)
             closeness = bond.get("closeness", 0)
-            bond_lines.append(f"- {target}: {label} (信任:{trust}, 亲密:{closeness})")
+            impressions = bond.get("impressions", [])
+            line = f"- {target}: {label} (信任:{trust}, 亲密:{closeness})"
+            if impressions:
+                latest = impressions[-1]  # 最新一条印象
+                line += f"\n  最近印象: {latest}"
+            bond_lines.append(line)
         bonds_text = "\n".join(bond_lines)
     else:
         bonds_text = "还没有建立深层关系"
+
+    # 近期重要经历（从action_log提取有意义的事件）
+    action_log = my_state.get("action_log", [])
+    important_events = []
+    for entry in action_log[-15:]:
+        result_text = str(entry.get("result", ""))
+        plan_text = str(entry.get("plan", ""))
+        # 筛选有意义的事件（不是简单的逛逛/发呆）
+        if any(kw in result_text for kw in ["赚了", "失败", "发现", "认识", "吵", "被", "完成", "学会", "受伤", "感动", "生气", "开心", "难过", "朋友圈", "任务"]):
+            important_events.append(result_text[:60])
+        elif any(kw in plan_text for kw in ["工作", "找", "和", "对", "去"]):
+            important_events.append(plan_text[:60])
+    important_events = important_events[-5:]  # 最多5条
+    important_events_text = "\n".join([f"- {e}" for e in important_events]) if important_events else "刚到这座城市，还没有什么经历"
 
     family_text = persona.get("family_info", "")
 
@@ -475,6 +494,9 @@ HP: {my_state['hp']}/100  金钱: {my_state['money']}元  能量: {my_state['ene
 === 我的重要记忆 ===
 {core_mem_text}
 
+=== 近期重要经历 ===
+{important_events_text}
+
 === 我的人际关系 ===
 {bonds_text}
 
@@ -585,6 +607,18 @@ def reflect(world, my_state, thought, plan, result, recent_msgs, force=False):
     emotions = my_state.get("emotions", {})
     emotions_text = json.dumps(emotions, ensure_ascii=False)
 
+    # 收集附近的人和NPC信息，让LLM知道该填谁的ID
+    nearby_people = []
+    my_loc = my_state.get("location", "")
+    for bid, bdata in world.get("bots", {}).items():
+        if bid != BOT_ID and bdata.get("location") == my_loc:
+            nearby_people.append(f"{bid}({bdata.get('name','?')})")
+    for loc_name, loc_data in world.get("locations", {}).items():
+        if loc_name == my_loc:
+            for npc in loc_data.get("npcs", []):
+                nearby_people.append(f"{npc.get('name','?')}(NPC)")
+    people_text = ", ".join(nearby_people) if nearby_people else "附近没有人"
+
     reflect_prompt = f"""你是{persona['name']}的内心反思系统。{context_hint}
 根据最近的经历，判断是否需要更新以下内容。
 
@@ -593,6 +627,8 @@ def reflect(world, my_state, thought, plan, result, recent_msgs, force=False):
 当前核心记忆: {core_mem_text}
 当前情感关系: {bonds_text}
 当前情绪: {emotions_text}
+
+附近的人: {people_text}
 
 最近经历:
 {recent_mem}
@@ -610,7 +646,7 @@ def reflect(world, my_state, thought, plan, result, recent_msgs, force=False):
     "happiness": 0, "sadness": 0, "anger": 0, "anxiety": 0, "loneliness": 0
   }},
   "bond_updates": {{
-    "bot_X": {{"trust_delta": 0, "closeness_delta": 0, "hostility_delta": 0, "label": "朋友/敌人/合作伙伴/陌生人"}}
+    "填入具体的bot_ID或NPC名字": {{"trust_delta": 0, "closeness_delta": 0, "hostility_delta": 0, "label": "朋友/敌人/合作伙伴/陌生人"}}
   }}
 }}
 
@@ -619,6 +655,8 @@ def reflect(world, my_state, thought, plan, result, recent_msgs, force=False):
 - 核心记忆只记录真正重要的事件
 - emotion_update中的值是delta(变化量)，范围-10到+10
 - 情感关系的delta范围是-10到+10
+- bond_updates中的key必须是具体的人名或bot_ID（如bot_3、包工头老陈），不要写bot_X
+- 如果最近没有和任何人互动，bond_updates留空{{}}
 - 只输出JSON，不要其他文字"""
 
     try:
@@ -683,7 +721,8 @@ def reflect(world, my_state, thought, plan, result, recent_msgs, force=False):
         bond_updates = updates.get("bond_updates", {})
         if bond_updates:
             for target, deltas in bond_updates.items():
-                if not target.startswith("bot_"):
+                # 过滤无效target
+                if target in ("bot_X", "填入具体的bot_ID或NPC名字", "") or not isinstance(deltas, dict):
                     continue
                 if target not in emotional_bonds:
                     emotional_bonds[target] = {"trust": 50, "hostility": 0, "closeness": 0, "label": "陌生人"}
