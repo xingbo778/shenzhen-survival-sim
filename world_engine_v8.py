@@ -1,20 +1,21 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-深圳生存模拟 - 世界引擎 v8.2
+深圳生存模拟 - 世界引擎 v8.3
 =========================
-v8.2 新增:
-- 寿命系统 (HP→不可逆寿命，饥饿/过劳加速衰老)
-- 固定开销 (每日房租+杂费)
-- 欲望衰减 (超90自动衰减)
-- 世界叙事摘要 (每天22:00生成城市日记)
-- NPC演化 (态度随互动变化)
-- 移动bug修复 (目的地=当前位置时转free)
+v8.3 新增:
+- 情感系统重塑 (衰减平衡，积极反馈)
+- 状态同步总线 (bot_agent完整状态同步)
+- 双向对话机制 (pending_reply驱动回应)
+- LLM鲁棒性强化 (正则提取JSON)
+- 长期目标字段 (long_term_goal)
+v8.2 原有:
+- 寿命系统/固定开销/欲望衰减/世界叙事/NPC演化
 v8 原有:
 - 天气/情绪/朋友圈/新闻/开放式行动/随机事件
 """
 
-import os, sys, json, random, time, logging, subprocess
+import os, sys, json, random, time, logging, subprocess, re
 from datetime import datetime
 from threading import Thread, Lock
 from typing import Optional
@@ -118,7 +119,7 @@ WEATHER_TRANSITION = {
 # --- 情绪系统 ---
 EMOTION_DIMS = ["happiness", "sadness", "anger", "anxiety", "loneliness"]
 EMOTION_LABELS = {"happiness": "开心", "sadness": "难过", "anger": "愤怒", "anxiety": "焦虑", "loneliness": "孤独"}
-EMOTION_DECAY = {"happiness": -5, "sadness": -1, "anger": -2, "anxiety": -1, "loneliness": 2}  # 每tick自然衰减/增长
+EMOTION_DECAY = {"happiness": -0.5, "sadness": -1, "anger": -2, "anxiety": -0.5, "loneliness": 0.5}  # 每tick自然衰减/增长 (v8.3: 大幅降低happiness衰减，让快乐更持久)
 
 # --- 食物菜单 ---
 FOOD_MENU = {
@@ -414,6 +415,10 @@ def create_bot(bot_id):
         "values": {"original": "", "current": "", "shifts": []},
         "core_memories": [],
         "emotional_bonds": {},
+        # v8.3 新增
+        "long_term_goal": None,           # 长期目标
+        "pending_reply_to": None,         # 待回应的对话 {"from": bot_id, "msg": "...", "tick": N}
+        "recent_actions_synced": [],      # 由bot_agent同步过来的最近行动
     }
 
 
@@ -451,7 +456,8 @@ def init_world():
                 for key in ["hp", "money", "energy", "satiety", "status", "job", "location",
                             "skills", "inventory", "relationships", "action_log", "is_sleeping",
                             "current_task", "selfie_count", "desires", "emotions",
-                            "phone_battery", "values", "core_memories", "emotional_bonds"]:
+                            "phone_battery", "values", "core_memories", "emotional_bonds",
+                            "long_term_goal", "pending_reply_to", "recent_actions_synced"]:
                     if key in bdata:
                         bot[key] = bdata[key]
                 # 家庭关系：如果快照中为空则用默认值
@@ -706,13 +712,13 @@ def world_tick():
             for emo_key, delta in weather_mood.items():
                 emotions[emo_key] = max(0, min(100, emotions.get(emo_key, 0) + delta))
 
-            # 孤独感：如果附近没有其他Bot，孤独感上升
+            # v8.3: 孤独感重新平衡 - 降低增长速度，提高社交减少量
             loc = bot["location"]
             nearby = [b for b in world["locations"].get(loc, {}).get("bots", []) if b != bid]
             if not nearby:
-                emotions["loneliness"] = min(100, emotions.get("loneliness", 30) + 2)
+                emotions["loneliness"] = min(100, emotions.get("loneliness", 30) + 0.5)
             else:
-                emotions["loneliness"] = max(0, emotions.get("loneliness", 30) - 3)
+                emotions["loneliness"] = max(0, emotions.get("loneliness", 30) - 5)
 
             # 金钱焦虑
             if bot["money"] < 50:
@@ -795,7 +801,10 @@ def world_tick():
                             bot["skills"][skill_key] = min(100, bot["skills"][skill_key] + random.randint(2, 4))
                         task["status"] = "completed"
                         task["result"] = f"成功完成! 赚了{pay}元" + (f"(含难点奖励{bonus}元)" if bonus else "")
-                        emotions["happiness"] = min(100, emotions.get("happiness", 50) + 2)
+                        # v8.3: 完成任务给予显著happiness奖励
+                        emotions["happiness"] = min(100, emotions.get("happiness", 50) + 12)
+                        emotions["anxiety"] = max(0, emotions.get("anxiety", 20) - 5)
+                        emotions["sadness"] = max(0, emotions.get("sadness", 10) - 3)
                         log.info(f"{bid} 完成任务[{task['task_name']}]: 赚{pay}元")
                     else:
                         pay = max(10, base_pay // 3)
@@ -1191,11 +1200,19 @@ def execute(bot_id, action):
         if target.startswith("bot_"):
             bot["relationships"][target] = bot["relationships"].get(target, 0) + 1
             if target in world["bots"] and world["bots"][target]["status"] == "alive":
-                world["bots"][target]["relationships"][bot_id] = world["bots"][target]["relationships"].get(bot_id, 0) + 1
+                target_bot = world["bots"][target]
+                target_bot["relationships"][bot_id] = target_bot["relationships"].get(bot_id, 0) + 1
+                # v8.3: 双向对话机制 - 设置对方的pending_reply_to
+                target_bot["pending_reply_to"] = {
+                    "from": bot_id,
+                    "from_name": bot.get("name", bot_id),
+                    "msg": message,
+                    "tick": world["time"]["tick"]
+                }
         bot["skills"]["social"] = min(100, bot["skills"]["social"] + 1)
-        # 社交降低孤独感
-        emotions["loneliness"] = max(0, emotions.get("loneliness", 30) - 5)
-        emotions["happiness"] = min(100, emotions.get("happiness", 50) + 1)
+        # v8.3: 社交给予更强的正面情绪反馈
+        emotions["loneliness"] = max(0, emotions.get("loneliness", 30) - 8)
+        emotions["happiness"] = min(100, emotions.get("happiness", 50) + 5)
         bot["emotions"] = emotions
         msg = f"对{target}说: {message}"
         log.info(f"{bot_id}: {msg}")
@@ -1675,12 +1692,19 @@ def interpret_free_action(bot_id, bot, desc):
             temperature=0.7, max_tokens=200,
         )
         raw = resp.choices[0].message.content.strip()
+        # v8.3: 更强力的JSON提取
         if raw.startswith("```"):
             raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-        start = raw.find("{")
-        end = raw.rfind("}") + 1
-        if start >= 0 and end > start:
-            raw = raw[start:end]
+        # 用正则贪婪匹配第一个完整JSON对象
+        json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', raw, re.DOTALL)
+        if json_match:
+            raw = json_match.group(0)
+        else:
+            # fallback: 用旧方法
+            start = raw.find("{")
+            end = raw.rfind("}") + 1
+            if start >= 0 and end > start:
+                raw = raw[start:end]
         result = json.loads(raw)
 
         # 应用数值变化
@@ -1703,7 +1727,7 @@ def interpret_free_action(bot_id, bot, desc):
         return narrative
 
     except Exception as e:
-        log.error(f"interpret_free_action失败: {e}")
+        log.error(f"interpret_free_action失败: {e} | raw={raw[:200] if 'raw' in dir() else 'N/A'}")
         # fallback: 简单处理
         bot["energy"] = max(0, bot["energy"] - 3)
         return desc
@@ -1789,6 +1813,10 @@ def get_bot_detail(bot_id: str):
             "core_memories": bot.get("core_memories", []),
             "emotional_bonds": bot.get("emotional_bonds", {}),
             "action_log": bot.get("action_log", [])[-15:],
+            "long_term_goal": bot.get("long_term_goal"),
+            "narrative_summary": bot.get("narrative_summary"),
+            "recent_actions_synced": bot.get("recent_actions_synced", []),
+            "pending_reply_to": bot.get("pending_reply_to"),
         }
 
 
@@ -1806,6 +1834,7 @@ async def bot_action(bot_id: str, request: Request):
 
 @app.post("/bot/{bot_id}/update_inner")
 async def update_inner(bot_id: str, request: Request):
+    """v8.2兼容端点"""
     data = await request.json()
     with lock:
         bot = world["bots"].get(bot_id)
@@ -1824,11 +1853,47 @@ async def update_inner(bot_id: str, request: Request):
     return {"ok": True}
 
 
+@app.post("/bot/{bot_id}/sync_state")
+async def sync_state(bot_id: str, request: Request):
+    """v8.3: 统一状态同步总线 - bot_agent每次心跳后同步完整状态"""
+    data = await request.json()
+    with lock:
+        bot = world["bots"].get(bot_id)
+        if not bot:
+            return {"error": "not found"}
+        # 同步核心记忆
+        if "core_memories" in data and data["core_memories"]:
+            bot["core_memories"] = data["core_memories"][-20:]
+        # 同步价值观
+        if "values" in data and data["values"]:
+            bot["values"] = data["values"]
+        # 同步情感纽带
+        if "emotional_bonds" in data and data["emotional_bonds"]:
+            bot["emotional_bonds"] = data["emotional_bonds"]
+        # 同步最近行动
+        if "recent_actions" in data:
+            bot["recent_actions_synced"] = data["recent_actions"][-10:]
+        # 同步长期目标
+        if "long_term_goal" in data and data["long_term_goal"]:
+            bot["long_term_goal"] = data["long_term_goal"]
+        # 同步内心状态叙事摘要
+        if "narrative_summary" in data and data["narrative_summary"]:
+            bot["narrative_summary"] = data["narrative_summary"]
+        # 清除已回应的pending_reply
+        if data.get("clear_pending_reply"):
+            bot["pending_reply_to"] = None
+    return {"ok": True}
+
+
 @app.get("/messages/{bot_id}")
 def get_messages(bot_id: str):
     with lock:
         msgs = [m for m in world["message_board"] if m.get("to") == bot_id or m.get("to") == "public"]
-        return {"messages": msgs[-20:]}
+        bot = world["bots"].get(bot_id, {})
+        return {
+            "messages": msgs[-20:],
+            "pending_reply_to": bot.get("pending_reply_to"),
+        }
 
 
 @app.post("/admin/send_message")
@@ -1911,6 +1976,10 @@ async def save_snapshot():
         for bid, bot in world["bots"].items():
             snapshot["bots"][bid] = dict(bot)
             snapshot["bots"][bid]["action_log"] = bot["action_log"][-20:]
+            # v8.3: 确保新字段存入快照
+            snapshot["bots"][bid]["long_term_goal"] = bot.get("long_term_goal")
+            snapshot["bots"][bid]["pending_reply_to"] = bot.get("pending_reply_to")
+            snapshot["bots"][bid]["recent_actions_synced"] = bot.get("recent_actions_synced", [])
         with open("/home/ubuntu/world_state_snapshot.json", "w") as f:
             json.dump(snapshot, f, ensure_ascii=False, indent=2)
     return {"ok": True, "tick": world["time"]["tick"]}
@@ -1949,7 +2018,7 @@ def start_tick_loop():
 def on_startup():
     init_world()
     start_tick_loop()
-    log.info("=== 深圳生存模拟 v8.2 世界引擎启动 (寿命系统/房租/欲望衰减/世界叙事) ===")
+    log.info("=== 深圳生存模拟 v8.3 世界引擎启动 (情感重塑/同步总线/双向对话/长期目标) ===")
     # 启动Bot进程
     for bot_id in PERSONAS:
         bot = world["bots"].get(bot_id)

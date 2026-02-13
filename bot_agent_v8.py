@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-深圳生存模拟 - Bot智能体 v8.2
-v8.2 新增:
-- 寿命感知 (HP→寿命，衰老警告)
-- 记忆去重 (字符重叠检测)
-- 关系ID规范化 (名字→bot_id映射)
-- 行为多样性 (反重复机制)
-- 世界叙事感知
+深圳生存模拟 - Bot智能体 v8.3
+v8.3 新增:
+- 状态同步总线 (每次心跳同步完整状态)
+- 反重复升级 (行动+内容摘要作为联合键)
+- 长期目标驱动 (反思中设定/更新长期目标)
+- 双向对话回应 (pending_reply驱动回应)
+v8.2 原有:
+- 寿命感知/记忆去重/关系ID规范/行为多样性/世界叙事
 v8 原有:
 - 情绪/朋友圈/手机/天气/开放式行动
 """
@@ -117,7 +118,9 @@ def normalize_target_id(name_or_id):
 memory = []           # 滚动记忆 (最近30条)
 core_memories = []    # 核心记忆 (永不丢失，最多20条)
 inner_thoughts = []   # 内心独白历史
-recent_actions = []   # 最近行动类型（用于反重复）
+recent_actions = []   # v8.3: 最近行动(行动+内容摘要，用于反重复)
+long_term_goal = None # v8.3: 长期目标
+narrative_summary = "" # v8.3: 内心叙事摘要
 
 def is_similar_memory(new_mem, existing_mems, threshold=0.6):
     """检测新记忆是否与已有记忆重复（字符重叠比）"""
@@ -205,12 +208,15 @@ def heartbeat():
             Timer(90, heartbeat).start()
             return
 
-        # 2. 获取发给我的消息
+        # 2. 获取发给我的消息 + pending_reply
         recent_msgs = []
         high_priority_msgs = []
+        pending_reply = None
         try:
             msg_resp = requests.get(f"{WORLD_URL}/messages/{BOT_ID}", timeout=5)
-            messages = msg_resp.json().get("messages", [])
+            msg_data = msg_resp.json()
+            messages = msg_data.get("messages", [])
+            pending_reply = msg_data.get("pending_reply_to")  # v8.3: 双向对话
             recent_msgs = messages[-8:]
             for m in recent_msgs:
                 msg_text = f"[消息] {m['from']}对我说: {m['msg']}"
@@ -227,12 +233,13 @@ def heartbeat():
                         high_priority_msgs.append(m)
         except:
             recent_msgs = []
+            pending_reply = None
 
         # 3. 获取朋友圈动态 (被动感知)
         moments_context = get_moments_context()
 
-        # 4. 内心独白 + 决策
-        thought, plan = think_and_plan(world, my_state, recent_msgs, high_priority_msgs, moments_context)
+        # 4. 内心独白 + 决策 (v8.3: 传入pending_reply)
+        thought, plan = think_and_plan(world, my_state, recent_msgs, high_priority_msgs, moments_context, pending_reply)
         log.warning(f"[内心独白] {thought}")
         log.info(f"[决策] {plan}")
 
@@ -248,9 +255,10 @@ def heartbeat():
 
         action_record = f"[{world['time']['virtual_datetime']}] 我做了: {plan} -> {result_str}"
         memory.append(action_record)
-        # 记录最近行动类型（用于反重复）
-        recent_actions.append(plan[:20])
-        if len(recent_actions) > 5:
+        # v8.3: 升级反重复 - 行动+内容摘要作为联合键
+        action_digest = f"{plan[:15]}|{result_str[:15]}"
+        recent_actions.append(action_digest)
+        if len(recent_actions) > 8:
             recent_actions.pop(0)
 
         # 6. 反思 (入睡时强制触发日终反思)
@@ -259,6 +267,26 @@ def heartbeat():
 
         if len(memory) > 30:
             memory.pop(0)
+
+        # v8.3: 统一状态同步总线
+        try:
+            sync_payload = {
+                "core_memories": core_memories,
+                "values": {
+                    "current": dynamic_values["current"],
+                    "original": dynamic_values["original"],
+                    "shifts": dynamic_values["shifts"][-5:]
+                },
+                "emotional_bonds": emotional_bonds,
+                "recent_actions": recent_actions[-8:],
+                "long_term_goal": long_term_goal,
+                "narrative_summary": narrative_summary,
+                "clear_pending_reply": pending_reply is not None,  # 如果有pending_reply则清除
+            }
+            requests.post(f"{WORLD_URL}/bot/{BOT_ID}/sync_state",
+                          json=sync_payload, timeout=10)
+        except Exception as e:
+            log.error(f"同步状态失败: {e}")
 
     except Exception as e:
         import traceback
@@ -338,7 +366,8 @@ def get_world_narrative():
 # ============================================================
 # 思考与决策
 # ============================================================
-def think_and_plan(world, my_state, recent_msgs, high_priority_msgs, moments_context):
+def think_and_plan(world, my_state, recent_msgs, high_priority_msgs, moments_context, pending_reply=None):
+    global long_term_goal
     recent_mem = "\n".join(memory[-10:])
     core_mem_text = "\n".join([f"⭐ {m['summary']}" for m in core_memories[-5:]]) if core_memories else "暂无重要记忆"
 
@@ -519,6 +548,16 @@ def think_and_plan(world, my_state, recent_msgs, high_priority_msgs, moments_con
     # === 手机电量（不再展示给bot，避免充电焦虑） ===
     phone_text = ""
 
+    # v8.3: 双向对话提示
+    pending_reply_text = ""
+    if pending_reply:
+        from_name = pending_reply.get("from_name", pending_reply.get("from", "?"))
+        from_id = pending_reply.get("from", "")
+        pending_msg = pending_reply.get("msg", "")
+        pending_reply_text = f"""\n🗣️ 有人在等你回应!
+{from_name}({from_id})刚才对你说: "{pending_msg}"
+→ 你应该回应这个人，就像真实对话一样自然地回应。你的行动应该是: 和{from_name}聊天，回应他/她说的话。"""
+
     prompt = f"""你是{persona['name']}，{persona['age']}岁{persona['gender']}，来自{persona['origin']}，{persona['edu']}学历。
 性格: {persona['personality']}
 价值观: {dynamic_values['current']}
@@ -569,6 +608,7 @@ NPC: {[n.get('name','?') for n in nearby_npcs]}
 === 收到的消息 ===
 {msgs_text}
 {hp_msgs_text}
+{pending_reply_text}
 
 === 最近的城市事件 ===
 {events_text}
@@ -576,8 +616,11 @@ NPC: {[n.get('name','?') for n in nearby_npcs]}
 === 城市日记 ===
 {get_world_narrative()}
 
-=== 你最近的行动(避免重复) ===
-{', '.join(recent_actions[-3:]) if recent_actions else '无'}
+=== 我的长期目标 ===
+{long_term_goal if long_term_goal else '还没有明确的长期目标，但你应该在生活中逐渐找到方向'}
+
+=== 你最近的行动(严禁重复!) ===
+{chr(10).join(recent_actions[-5:]) if recent_actions else '无'}
 
 请你以{persona['name']}的第一人称视角，先进行一段内心独白(2-4句话，体现你的性格、情绪和当前处境)，然后做出一个行动决策。
 
@@ -585,8 +628,8 @@ NPC: {[n.get('name','?') for n in nearby_npcs]}
 - 基于你的实际记忆和状态来做决策，不要编造没发生过的经历。
 - 你是一个有个性的真实的人，按照你的性格、情绪和欲望自由行动。
 - 寿命不可恢复！饥饿和过劳会加速衰老。注意吃饭和休息。
-- 尽量不要连续重复同一种行动，你是一个活生生的人，不是机器。
-- 你的行动应该被你的内心驱动，而不是被规则约束。
+- 严禁重复上面列出的最近行动！你是一个活生生的人，不是机器。如果你刚和某人聊过天，下一步应该做点别的。
+- 你的行动应该被你的内心和长期目标驱动，而不是被规则约束。
 
 你可以做任何一个真实的人会做的事情，包括但不限于:
 - 吃饭(在当前位置直接吃，不需要移动): 城中村快餐5元、路边摊炒粉12元、便利店饭团8元、奶茶15元、火锅60元
@@ -653,6 +696,7 @@ NPC: {[n.get('name','?') for n in nearby_npcs]}
 # ============================================================
 def reflect(world, my_state, thought, plan, result, recent_msgs, force=False):
     """反思系统。force=True时强制执行（入睡时触发日终反思）"""
+    global long_term_goal, narrative_summary
     if not force and heartbeat_count % 5 != 0:
         return
 
@@ -699,8 +743,7 @@ def reflect(world, my_state, thought, plan, result, recent_msgs, force=False):
 
 请输出一个JSON对象，包含以下字段(只输出需要更新的字段，不需要更新的留空或不写):
 
-{{
-  "values_update": "如果经历了重大事件导致价值观微调，写出新的价值观描述(保持原有风格，只做微调)。如果不需要变化，写null",
+{{  "values_update": "如果经历了重大事件导致价值观微调，写出新的价值观描述(保持原有风格，只做微调)。如果不需要变化，写null",
   "new_core_memory": "如果最近发生了值得永远记住的重要事件，用一句话总结。如果没有，写null",
   "memory_emotion": "这段记忆的情感标签: positive/negative/neutral",
   "emotion_update": {{
@@ -708,7 +751,10 @@ def reflect(world, my_state, thought, plan, result, recent_msgs, force=False):
   }},
   "bond_updates": {{
     "填入具体的bot_ID或NPC名字": {{"trust_delta": 0, "closeness_delta": 0, "hostility_delta": 0, "label": "朋友/敌人/合作伙伴/陌生人"}}
-  }}
+  }},
+  "long_term_goal": "基于你的性格、经历和当前处境，设定或更新一个具体的长期目标(如'在南山找到稳定的程序员工作'、'存够钱开一家自己的店'、'成为10万粉丝的网红')。如果当前目标仍然有效，写null",
+  "narrative_summary": "用一句话总结你现在的人生状态(如'刚到深圳的程序员，在城中村艰难求生，渴望找到稳定工作')"
+}}
 }}
 
 注意：
@@ -725,16 +771,15 @@ def reflect(world, my_state, thought, plan, result, recent_msgs, force=False):
             model="gpt-4.1-nano",
             messages=[{"role": "user", "content": reflect_prompt}],
             temperature=0.3,
-            max_tokens=400,
+            max_tokens=500,
         )
         raw = resp.choices[0].message.content.strip()
         if raw.startswith("```"):
             raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-        # 提取JSON对象
-        start = raw.find("{")
-        end = raw.rfind("}") + 1
-        if start >= 0 and end > start:
-            raw = raw[start:end]
+        # v8.3: 更强力的JSON提取
+        json_match = re.search(r'\{[\s\S]*\}', raw)
+        if json_match:
+            raw = json_match.group(0)
         updates = json.loads(raw)
 
         # 更新价值观
@@ -802,7 +847,19 @@ def reflect(world, my_state, thought, plan, result, recent_msgs, force=False):
                     bond["label"] = deltas["label"]
                 log.info(f"[关系更新] {target}: 信任={bond['trust']} 敌意={bond['hostility']} 亲密={bond['closeness']} 标签={bond['label']}")
 
-        # 同步到世界引擎
+        # v8.3: 更新长期目标
+        new_goal = updates.get("long_term_goal")
+        if new_goal and new_goal != "null":
+            long_term_goal = new_goal
+            log.warning(f"[长期目标] 🎯 {long_term_goal}")
+
+        # v8.3: 更新叙事摘要
+        new_narrative = updates.get("narrative_summary")
+        if new_narrative and new_narrative != "null":
+            narrative_summary = new_narrative
+            log.info(f"[叙事摘要] {narrative_summary}")
+
+        # v8.3: 同步到世界引擎 (保留兼容旧端点)
         sync_data = {}
         if updates.get("values_update") and updates["values_update"] != "null":
             sync_data["values"] = {
@@ -838,7 +895,7 @@ if __name__ == "__main__":
     log.info(f"习惯: {persona.get('habits', '')}")
     if persona.get("family_info"):
         log.info(f"家庭: {persona['family_info']}")
-    log.info(f"v8.2能力: 寿命系统/记忆去重/关系ID规范/行为多样性/世界叙事")
+    log.info(f"v8.3能力: 同步总线/反重复升级/长期目标/双向对话")
 
     # 尝试从世界引擎恢复内心状态
     try:
@@ -856,6 +913,13 @@ if __name__ == "__main__":
             if detail.get("emotional_bonds"):
                 emotional_bonds.update(detail["emotional_bonds"])
                 log.info(f"恢复{len(detail['emotional_bonds'])}条情感关系")
+            # v8.3: 恢复长期目标和叙事摘要
+            if detail.get("long_term_goal"):
+                long_term_goal = detail["long_term_goal"]
+                log.info(f"恢复长期目标: {long_term_goal}")
+            if detail.get("narrative_summary"):
+                narrative_summary = detail["narrative_summary"]
+                log.info(f"恢复叙事摘要: {narrative_summary}")
     except:
         log.info("无法恢复内心状态，从头开始")
 
