@@ -81,13 +81,13 @@ DESIRE_DECAY_ON_FULFILL = 30
 
 # --- 天气系统 ---
 WEATHER_TYPES = {
-    "晴天": {"desc": "阳光明媚，适合外出", "mood_effect": {"happiness": 3, "sadness": -2}, "energy_mod": 0, "event_chance_mod": 0},
+    "晴天": {"desc": "阳光明媚，适合外出", "mood_effect": {"happiness": 1, "sadness": -1}, "energy_mod": 0, "event_chance_mod": 0},
     "多云": {"desc": "天空灰蒙蒙的", "mood_effect": {"happiness": 0}, "energy_mod": 0, "event_chance_mod": 0},
     "小雨": {"desc": "淅淅沥沥的小雨", "mood_effect": {"sadness": 2, "loneliness": 2}, "energy_mod": -1, "event_chance_mod": 0.02},
     "暴雨": {"desc": "倾盆大雨，出行困难", "mood_effect": {"anxiety": 3, "sadness": 3}, "energy_mod": -3, "event_chance_mod": 0.05},
     "台风": {"desc": "台风来袭！所有人尽量待在室内", "mood_effect": {"anxiety": 8, "sadness": 2}, "energy_mod": -5, "event_chance_mod": 0.15},
     "闷热": {"desc": "又热又闷，让人烦躁", "mood_effect": {"anger": 3, "happiness": -2}, "energy_mod": -2, "event_chance_mod": 0.01},
-    "凉爽": {"desc": "难得的凉爽天气", "mood_effect": {"happiness": 5, "anxiety": -3}, "energy_mod": 1, "event_chance_mod": 0},
+    "凉爽": {"desc": "难得的凉爽天气", "mood_effect": {"happiness": 2, "anxiety": -2}, "energy_mod": 1, "event_chance_mod": 0},
 }
 
 WEATHER_TRANSITION = {
@@ -103,17 +103,17 @@ WEATHER_TRANSITION = {
 # --- 情绪系统 ---
 EMOTION_DIMS = ["happiness", "sadness", "anger", "anxiety", "loneliness"]
 EMOTION_LABELS = {"happiness": "开心", "sadness": "难过", "anger": "愤怒", "anxiety": "焦虑", "loneliness": "孤独"}
-EMOTION_DECAY = {"happiness": -2, "sadness": -1, "anger": -2, "anxiety": -1, "loneliness": 1}  # 每tick自然衰减/增长
+EMOTION_DECAY = {"happiness": -5, "sadness": -1, "anger": -2, "anxiety": -1, "loneliness": 2}  # 每tick自然衰减/增长
 
 # --- 食物菜单 ---
 FOOD_MENU = {
-    "城中村快餐": {"cost": 5, "satiety": 40, "mood": {"happiness": 2}},
+    "城中村快餐": {"cost": 5, "satiety": 40, "mood": {"happiness": 1}},
     "路边摊炒粉": {"cost": 12, "satiety": 50, "mood": {"happiness": 5}},
     "便利店饭团": {"cost": 8, "satiety": 30, "mood": {"happiness": 1}},
     "麦当劳套餐": {"cost": 35, "satiety": 60, "mood": {"happiness": 8}},
-    "火锅": {"cost": 80, "satiety": 90, "mood": {"happiness": 15, "loneliness": -5}},
+    "火锅": {"cost": 80, "satiety": 90, "mood": {"happiness": 8, "loneliness": -5}},
     "泡面": {"cost": 3, "satiety": 25, "mood": {"sadness": 3}},
-    "奶茶": {"cost": 15, "satiety": 10, "mood": {"happiness": 8, "anxiety": -3}},
+    "奶茶": {"cost": 15, "satiety": 10, "mood": {"happiness": 4, "anxiety": -2}},
 }
 
 # --- 欲望系统 ---
@@ -580,6 +580,9 @@ def world_tick():
         if vh == 6 and t["tick"] > 1:
             update_weather()
             inject_news()
+        # 每6个tick也刷新一次新闻和热搜，保持内容新鲜
+        elif t["tick"] % 6 == 0:
+            inject_news()
 
         # 天气效果
         weather_info = WEATHER_TYPES.get(world["weather"]["current"], {})
@@ -650,7 +653,18 @@ def world_tick():
 
             # 金钱焦虑
             if bot["money"] < 50:
-                emotions["anxiety"] = min(100, emotions.get("anxiety", 20) + 2)
+                emotions["anxiety"] = min(100, emotions.get("anxiety", 20) + 3)
+                emotions["sadness"] = min(100, emotions.get("sadness", 10) + 2)
+            elif bot["money"] < 100:
+                emotions["anxiety"] = min(100, emotions.get("anxiety", 20) + 1)
+
+            # 能量低时疲惫感
+            if bot["energy"] < 20:
+                emotions["sadness"] = min(100, emotions.get("sadness", 10) + 2)
+                emotions["happiness"] = max(0, emotions.get("happiness", 50) - 3)
+
+            # 无聊/无事可做时happiness自然下降
+            # （已经通过EMOTION_DECAY实现）
 
             bot["emotions"] = emotions
 
@@ -711,7 +725,7 @@ def world_tick():
                             bot["skills"][skill_key] = min(100, bot["skills"][skill_key] + random.randint(2, 4))
                         task["status"] = "completed"
                         task["result"] = f"成功完成! 赚了{pay}元" + (f"(含难点奖励{bonus}元)" if bonus else "")
-                        emotions["happiness"] = min(100, emotions.get("happiness", 50) + 8)
+                        emotions["happiness"] = min(100, emotions.get("happiness", 50) + 2)
                         log.info(f"{bid} 完成任务[{task['task_name']}]: 赚{pay}元")
                     else:
                         pay = max(10, base_pay // 3)
@@ -740,6 +754,18 @@ def world_tick():
         event_chance = 0.08 + WEATHER_TYPES.get(world["weather"]["current"], {}).get("event_chance_mod", 0)
         if random.random() < event_chance:
             trigger_event()
+
+        # === 被动朋友圈互动：每tick每个bot有概率刷朋友圈点赞 ===
+        recent_moments = world.get("moments", [])[-10:]
+        if recent_moments:
+            for bid, bot in world["bots"].items():
+                if bot["status"] != "alive" or bot.get("is_sleeping"):
+                    continue
+                if random.random() < 0.15:  # 15%概率刷朋友圈
+                    for m in recent_moments:
+                        if m["bot_id"] != bid and bid not in m.get("likes", []):
+                            if random.random() < 0.4:  # 40%概率点赞
+                                m["likes"].append(bid)
 
         # 清理过期效果
         world["active_effects"] = [e for e in world["active_effects"] if e["expires_tick"] > t["tick"]]
@@ -845,16 +871,17 @@ def process_action(bot_id, plan):
 15. 寻欢: {{"action":"seek_pleasure"}}
 16. 自由行动(以上都不匹配时): {{"action":"free_action","desc":"具体描述","category":"leisure/creative/exercise/shopping/learning/other"}}
 
-## 规则
+## 规则（按优先级排序，从上到下检查）
+- ⭐ 如果计划提到"继续做"/"继续工作"/"继续任务"/"继续布置"/"继续整理"/"继续搬货"等与当前任务相关的内容，必须用work
+- 如果计划提到吃/喝/食物/快餐/炒粉/饭团/奶茶/火锅/泡面，用eat，选最接近的食物名
+- 如果计划提到工作/赚钱/送外卖/找工作/应聘/打工，用work
 - 如果计划提到去某个地点且不是当前地点，用move
 - 如果计划提到去某个地点且就是当前地点，用explore
 - 如果计划同时包含"去某地"和"做某事"，优先用move（到了再做事）
-- 如果计划提到吃/喝/食物，用eat，选最接近的食物名
-- 如果计划提到工作/赚钱/送外卖等，用work
-- 如果计划提到发朋友圈/晒/分享，用post_moment
-- 如果计划提到刷手机/看新闻/看热搜，用browse_phone
-- 如果计划提到拍照/自拍/拍视频，用selfie
-- 如果计划提到和某人聊天/搭讪/交流，用talk
+- 如果计划提到发朋友圈/晒/分享到朋友圈，用post_moment
+- 如果计划提到刷手机/看新闻/看热搜/刷朋友圈，用browse_phone
+- 如果计划提到拍照/自拍/拍视频/拍照片，用selfie
+- 如果计划提到和某人聊天/搭讪/交流/打电话/问/聊聊，用talk
 - 如果以上都不匹配，用free_action
 
 ## 计划
@@ -1008,7 +1035,7 @@ def execute(bot_id, action):
         bot["skills"]["social"] = min(100, bot["skills"]["social"] + 1)
         # 社交降低孤独感
         emotions["loneliness"] = max(0, emotions.get("loneliness", 30) - 5)
-        emotions["happiness"] = min(100, emotions.get("happiness", 50) + 2)
+        emotions["happiness"] = min(100, emotions.get("happiness", 50) + 1)
         bot["emotions"] = emotions
         msg = f"对{target}说: {message}"
         log.info(f"{bot_id}: {msg}")
@@ -1032,7 +1059,7 @@ def execute(bot_id, action):
                 bot["money"] += 50
             else:
                 bot["inventory"].append(found)
-            emotions["happiness"] = min(100, emotions.get("happiness", 50) + 5)
+            emotions["happiness"] = min(100, emotions.get("happiness", 50) + 2)
             msg = f"在{loc}探索，发现了{found}！"
         else:
             msg = f"在{loc}四处逛了逛，熟悉了环境"
@@ -1070,6 +1097,26 @@ def execute(bot_id, action):
     elif act == "post_moment":
         content = action.get("content", "")
         mood = action.get("mood", "neutral")
+        # 基于最近的实际行动生成朋友圈内容，避免LLM幻觉
+        recent_actions = bot.get("action_log", [])[-5:]
+        if recent_actions:
+            action_summaries = [a.get("plan", "") for a in recent_actions if a.get("plan")]
+            if action_summaries:
+                try:
+                    gen_resp = client.chat.completions.create(
+                        model="gpt-4.1-nano",
+                        messages=[{"role": "user", "content": f"""你是{bot.get('name', bot_id)}，根据你最近的真实经历写一条朋友圈。
+你最近做了: {'; '.join(action_summaries[-3:])}
+当前位置: {bot['location']}
+当前心情: {mood}
+
+要求：只基于以上真实经历写，不要编造没发生的事。像真人发朋友圈一样，简短自然，1-2句话。
+只输出朋友圈内容，不要其他文字。"""}],
+                        temperature=0.8, max_tokens=100,
+                    )
+                    content = gen_resp.choices[0].message.content.strip().strip('"')
+                except:
+                    pass  # 失败时用原始 content
         moment = {
             "id": f"m_{world['time']['tick']}_{bot_id}",
             "bot_id": bot_id,
@@ -1199,7 +1246,7 @@ def execute(bot_id, action):
 
         desires["lust"] = max(0, desires.get("lust", 50) - DESIRE_DECAY_ON_FULFILL)
         bot["energy"] = max(0, bot["energy"] - 10)
-        emotions["happiness"] = min(100, emotions.get("happiness", 50) + 10)
+        emotions["happiness"] = min(100, emotions.get("happiness", 50) + 5)
         emotions["loneliness"] = max(0, emotions.get("loneliness", 30) - 15)
         bot["desires"] = desires
         bot["emotions"] = emotions
@@ -1208,7 +1255,7 @@ def execute(bot_id, action):
         t_desires["lust"] = max(0, t_desires.get("lust", 50) - DESIRE_DECAY_ON_FULFILL * 0.7)
         target["desires"] = t_desires
         t_emotions = target.get("emotions", {})
-        t_emotions["happiness"] = min(100, t_emotions.get("happiness", 50) + 8)
+        t_emotions["happiness"] = min(100, t_emotions.get("happiness", 50) + 4)
         t_emotions["loneliness"] = max(0, t_emotions.get("loneliness", 30) - 10)
         target["emotions"] = t_emotions
 
@@ -1241,7 +1288,7 @@ def execute(bot_id, action):
         filename = f"{bot_id}_day{world['time']['virtual_day']}_{tick}.jpg"
         save_path = f"/home/ubuntu/selfies/{filename}"
         bot["phone_battery"] = max(0, bot.get("phone_battery", 100) - 5)
-        emotions["happiness"] = min(100, emotions.get("happiness", 50) + 3)
+        emotions["happiness"] = min(100, emotions.get("happiness", 50) + 2)
         desires = bot.get("desires", {})
         desires["vanity"] = max(0, desires.get("vanity", 20) - 8)
         bot["desires"] = desires
@@ -1276,30 +1323,30 @@ def execute(bot_id, action):
         if category == "exercise":
             bot["energy"] = max(0, bot["energy"] - 10)
             bot["hp"] = min(100, bot["hp"] + 2)
-            emotions["happiness"] = min(100, emotions.get("happiness", 50) + 5)
+            emotions["happiness"] = min(100, emotions.get("happiness", 50) + 2)
             emotions["anxiety"] = max(0, emotions.get("anxiety", 20) - 5)
         elif category == "creative":
             bot["skills"]["creative"] = min(100, bot["skills"].get("creative", 10) + 2)
-            emotions["happiness"] = min(100, emotions.get("happiness", 50) + 3)
+            emotions["happiness"] = min(100, emotions.get("happiness", 50) + 2)
         elif category == "learning":
             bot["skills"]["tech"] = min(100, bot["skills"].get("tech", 10) + 1)
             emotions["anxiety"] = max(0, emotions.get("anxiety", 20) - 2)
         elif category == "leisure":
-            emotions["happiness"] = min(100, emotions.get("happiness", 50) + 4)
+            emotions["happiness"] = min(100, emotions.get("happiness", 50) + 2)
             emotions["loneliness"] = max(0, emotions.get("loneliness", 30) - 2)
             bot["energy"] = min(100, bot["energy"] + 3)
         elif category == "shopping":
             cost = random.randint(10, 50)
             if bot["money"] >= cost:
                 bot["money"] -= cost
-                emotions["happiness"] = min(100, emotions.get("happiness", 50) + 6)
+                emotions["happiness"] = min(100, emotions.get("happiness", 50) + 3)
                 desires = bot.get("desires", {})
                 desires["greed"] = max(0, desires.get("greed", 20) - 5)
                 bot["desires"] = desires
             else:
                 return f"想{desc}，但钱不够"
         else:
-            emotions["happiness"] = min(100, emotions.get("happiness", 50) + 2)
+            emotions["happiness"] = min(100, emotions.get("happiness", 50) + 1)
 
         bot["emotions"] = emotions
         msg = f"{desc}"
