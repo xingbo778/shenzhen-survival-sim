@@ -27,6 +27,7 @@ from typing import Optional
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 from openai import OpenAI
 from world_rules_engine import tick_rules, generate_rules_from_action, get_rules_summary, get_attraction_signals
@@ -47,6 +48,16 @@ log.addHandler(fh)
 log.addHandler(sh)
 
 app = FastAPI(title="深圳生存模拟 v9.0 - 自我进化")
+
+# CORS - 允许像素城市前端跨域访问
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 client = OpenAI()
 lock = Lock()
 
@@ -1744,7 +1755,7 @@ def _spawn_new_generation_bot(dead_bot_id, dead_bot):
             json.dump(persona_override, f, ensure_ascii=False)
         
         subprocess.Popen(
-            ["python3", "/home/ubuntu/bot_agent_v8.py"],
+            ["python3", "/home/ubuntu/shenzhen-survival-sim/bot_agent_v8.py"],
             env=dict(os.environ, BOT_ID=dead_bot_id)
         )
         log.info(f"  新bot {template['name']}({dead_bot_id}) 已生成并启动 (第{gen}代)")
@@ -3679,7 +3690,7 @@ def on_startup():
         if bot and bot["status"] == "alive":
             try:
                 subprocess.Popen(
-                    ["python3", "/home/ubuntu/bot_agent_v8.py"],
+                    ["python3", "/home/ubuntu/shenzhen-survival-sim/bot_agent_v8.py"],
                     env=dict(os.environ, BOT_ID=bot_id)
                 )
                 log.info(f"Bot {bot_id} 进程已启动")
