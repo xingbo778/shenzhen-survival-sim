@@ -8,7 +8,7 @@ import { BOT_COLORS, LOCATION_MAP_CONFIG } from "@/types/world";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Zap, Smartphone, MapPin } from "lucide-react";
-import { useState, useMemo } from "react";
+import { useState, useMemo, memo } from "react";
 import { MarketPressureBar } from "./MarketPressureBar";
 import { useMarketData } from "@/hooks/useMarketData";
 
@@ -21,7 +21,7 @@ interface Props {
   onBotClick: (botId: string) => void;
 }
 
-export default function RightPanel({ world, moments, selectedLocation, onBotClick }: Props) {
+function RightPanel({ world, moments, selectedLocation, onBotClick }: Props) {
   const market = useMarketData();
   return (
     <Tabs defaultValue="events" className="h-full flex flex-col gap-0 glass-panel-solid border-0">
@@ -51,6 +51,8 @@ export default function RightPanel({ world, moments, selectedLocation, onBotClic
     </Tabs>
   );
 }
+
+export default memo(RightPanel)
 
 // ===== 事件流 =====
 function EventsTab({ world, onBotClick }: { world: WorldState | null; onBotClick: (id: string) => void }) {

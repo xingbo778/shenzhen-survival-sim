@@ -58,14 +58,18 @@ export default function Home() {
     }, 350);
   }, []);
 
+  // Use a ref so handleSendMessage doesn't need world in its deps
+  const worldRef = useRef(world);
+  worldRef.current = world;
+
   const handleSendMessage = useCallback(async (botId: string, msg: string) => {
     const ok = await sendMessage(botId, msg);
     if (ok) {
-      toast.success(`消息已发送给 ${world?.bots[botId]?.name || botId}`);
+      toast.success(`消息已发送给 ${worldRef.current?.bots[botId]?.name || botId}`);
     } else {
       toast.error("发送失败，请检查 world_engine 是否运行");
     }
-  }, [world]);
+  }, []);
 
   const aliveBots = useMemo(() =>
     world
@@ -86,7 +90,10 @@ export default function Home() {
           const next = new Set(prev);
           entries.forEach(e => {
             const id = (e.target as HTMLElement).dataset.botid;
-            if (id) { if (e.isIntersecting) next.add(id); }
+            if (id) {
+              if (e.isIntersecting) next.add(id);
+              else next.delete(id);
+            }
           });
           return next;
         });

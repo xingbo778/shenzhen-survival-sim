@@ -356,18 +356,40 @@ export interface BubbleLabel {
   alpha:  number
 }
 
-export function createBubbleLabel(emoji: string): CSS2DObject {
+// Object pool: reuse CSS2DObject instances to avoid DOM churn at scale.
+const BUBBLE_POOL_SIZE = 32
+const _bubblePool: CSS2DObject[] = []
+
+function _acquireBubbleObj(emoji: string): CSS2DObject {
+  const obj = _bubblePool.pop()
+  if (obj) {
+    obj.element.textContent = emoji
+    ;(obj.element as HTMLElement).style.opacity = '1'
+    return obj
+  }
   const div = document.createElement('div')
-  div.style.cssText = `
-    font-size: 18px;
-    line-height: 1;
-    pointer-events: none;
-    user-select: none;
-    text-shadow: 0 1px 3px rgba(0,0,0,0.8);
-    animation: bubble-pop 0.3s ease-out;
-  `
+  div.style.cssText = [
+    'font-size:18px',
+    'line-height:1',
+    'pointer-events:none',
+    'user-select:none',
+    'text-shadow:0 1px 3px rgba(0,0,0,0.8)',
+    'animation:bubble-pop 0.3s ease-out',
+  ].join(';')
   div.textContent = emoji
   return new CSS2DObject(div)
+}
+
+function _releaseBubbleObj(obj: CSS2DObject): void {
+  if (_bubblePool.length < BUBBLE_POOL_SIZE) {
+    _bubblePool.push(obj)
+  } else {
+    obj.element.remove()
+  }
+}
+
+export function createBubbleLabel(emoji: string): CSS2DObject {
+  return _acquireBubbleObj(emoji)
 }
 
 export function tickBubbleLabels(
@@ -391,7 +413,7 @@ export function tickBubbleLabels(
 
     if (b.timer <= 0) {
       scene.remove(b.obj)
-      b.obj.element.remove()
+      _releaseBubbleObj(b.obj)
       return false
     }
     return true

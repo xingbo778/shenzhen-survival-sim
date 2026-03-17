@@ -1,12 +1,11 @@
 /**
  * Buildings3D — textured BoxGeometry buildings sized to their tile footprint.
  *
- * Each building occupies a specific number of tiles (tileW × tileH).
- * The box width/depth matches the footprint exactly (with a small margin).
- * `scale` only affects height, never the footprint.
- *
- * Landmark buildings (市民中心, 平安金融中心, 会展中心, etc.) get unique
- * procedural geometry instead of generic boxes.
+ * Performance architecture:
+ *  - Non-landmark buildings use THREE.InstancedMesh grouped by (pngKey, tileW, tileH).
+ *    200 buildings → typically ~20 draw calls instead of 600+.
+ *  - Landmark buildings keep full procedural LOD geometry (they are unique).
+ *  - Per-instance matrix encodes (posX, height, posZ) + Y-scale = actual height.
  */
 
 import * as THREE from 'three'
@@ -88,6 +87,11 @@ function getBuildingTextures(key: string) {
   }
 }
 
+function getOrCreateMat(key: string, factory: () => THREE.MeshLambertMaterial): THREE.MeshLambertMaterial {
+  if (!matCache.has(key)) matCache.set(key, factory())
+  return matCache.get(key)!
+}
+
 // ── Seeded random ────────────────────────────────────────────────────
 let _seed = 1
 function sr(): number {
@@ -98,13 +102,11 @@ function sr(): number {
 // ── Landmark geometry builders ───────────────────────────────────────
 
 function buildLandmarkCivic(width: number, depth: number): THREE.Object3D {
-  // 市民中心 — low curved roof with wings, like a giant bird
   const obj = new THREE.Object3D()
   const bodyH = 2.5
   const bodyMat = new THREE.MeshLambertMaterial({ color: 0xDDEEFF })
   const glassMat = new THREE.MeshLambertMaterial({ color: 0x88BBDD, transparent: true, opacity: 0.6 })
 
-  // Central dome
   const domeR = Math.min(width, depth) * 0.3
   const dome = new THREE.Mesh(
     new THREE.SphereGeometry(domeR, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2),
@@ -113,12 +115,10 @@ function buildLandmarkCivic(width: number, depth: number): THREE.Object3D {
   dome.position.y = bodyH
   obj.add(dome)
 
-  // Main body — wide flat box
   const body = new THREE.Mesh(new THREE.BoxGeometry(width, bodyH, depth), bodyMat)
   body.position.y = bodyH / 2
   obj.add(body)
 
-  // Wing extensions
   const wingW = width * 0.15, wingH = bodyH * 0.6, wingD = depth * 1.1
   const wingMat = new THREE.MeshLambertMaterial({ color: 0xCCDDEE })
   for (const side of [-1, 1]) {
@@ -127,7 +127,6 @@ function buildLandmarkCivic(width: number, depth: number): THREE.Object3D {
     obj.add(wing)
   }
 
-  // Roof overhang
   const roofGeo = new THREE.BoxGeometry(width * 1.15, 0.15, depth * 1.15)
   const roof = new THREE.Mesh(roofGeo, new THREE.MeshLambertMaterial({ color: 0xEEEEEE }))
   roof.position.y = bodyH
@@ -137,14 +136,12 @@ function buildLandmarkCivic(width: number, depth: number): THREE.Object3D {
 }
 
 function buildLandmarkPingan(width: number, depth: number): THREE.Object3D {
-  // 平安金融中心 — tallest building in Shenzhen, tapered tower with spire
   const obj = new THREE.Object3D()
   const totalH = 18
 
-  // Main tower — tapered
   const towerGeo = new THREE.CylinderGeometry(
-    Math.min(width, depth) * 0.25,  // top radius (narrower)
-    Math.min(width, depth) * 0.4,   // bottom radius
+    Math.min(width, depth) * 0.25,
+    Math.min(width, depth) * 0.4,
     totalH * 0.85,
     8,
   )
@@ -153,10 +150,7 @@ function buildLandmarkPingan(width: number, depth: number): THREE.Object3D {
   tower.position.y = totalH * 0.85 / 2
   obj.add(tower)
 
-  // Glass curtain wall effect — slightly larger transparent shell
-  const glassMat = new THREE.MeshLambertMaterial({
-    color: 0xAADDFF, transparent: true, opacity: 0.3,
-  })
+  const glassMat = new THREE.MeshLambertMaterial({ color: 0xAADDFF, transparent: true, opacity: 0.3 })
   const glassGeo = new THREE.CylinderGeometry(
     Math.min(width, depth) * 0.26,
     Math.min(width, depth) * 0.41,
@@ -167,7 +161,6 @@ function buildLandmarkPingan(width: number, depth: number): THREE.Object3D {
   glass.position.y = totalH * 0.85 / 2
   obj.add(glass)
 
-  // Spire
   const spireH = totalH * 0.15
   const spireGeo = new THREE.ConeGeometry(0.15, spireH, 4)
   const spireMat = new THREE.MeshLambertMaterial({ color: 0xCCCCCC })
@@ -175,7 +168,6 @@ function buildLandmarkPingan(width: number, depth: number): THREE.Object3D {
   spire.position.y = totalH * 0.85 + spireH / 2
   obj.add(spire)
 
-  // Base podium
   const podiumH = 1.5
   const podium = new THREE.Mesh(
     new THREE.BoxGeometry(width * 0.9, podiumH, depth * 0.9),
@@ -188,17 +180,14 @@ function buildLandmarkPingan(width: number, depth: number): THREE.Object3D {
 }
 
 function buildLandmarkExpo(width: number, depth: number): THREE.Object3D {
-  // 会展中心 — long, low, wavy-roofed exhibition hall
   const obj = new THREE.Object3D()
   const bodyH = 2.5
   const bodyMat = new THREE.MeshLambertMaterial({ color: 0xBBCCDD })
 
-  // Main body
   const body = new THREE.Mesh(new THREE.BoxGeometry(width, bodyH, depth), bodyMat)
   body.position.y = bodyH / 2
   obj.add(body)
 
-  // Wavy roof segments
   const segments = 5
   const segW = width / segments
   const roofMat = new THREE.MeshLambertMaterial({ color: 0xEEEEFF })
@@ -211,7 +200,6 @@ function buildLandmarkExpo(width: number, depth: number): THREE.Object3D {
     obj.add(arch)
   }
 
-  // Glass entrance
   const entranceMat = new THREE.MeshLambertMaterial({ color: 0x88BBDD, transparent: true, opacity: 0.5 })
   const entrance = new THREE.Mesh(new THREE.BoxGeometry(width * 0.3, bodyH * 0.8, 0.3), entranceMat)
   entrance.position.set(0, bodyH * 0.4, depth / 2 + 0.15)
@@ -221,11 +209,9 @@ function buildLandmarkExpo(width: number, depth: number): THREE.Object3D {
 }
 
 function buildLandmarkKK100(width: number, depth: number): THREE.Object3D {
-  // 京基100 — second tallest, rectangular tapered tower
   const obj = new THREE.Object3D()
   const totalH = 14
 
-  // Main tower — box that tapers
   const sections = 4
   const sectionH = totalH / sections
   for (let i = 0; i < sections; i++) {
@@ -240,7 +226,6 @@ function buildLandmarkKK100(width: number, depth: number): THREE.Object3D {
     obj.add(section)
   }
 
-  // Crown
   const crownH = 1.0
   const crown = new THREE.Mesh(
     new THREE.CylinderGeometry(0.2, width * 0.15, crownH, 6),
@@ -266,10 +251,8 @@ function buildLandmarkLOD(key: string, width: number, depth: number): THREE.Obje
   const meta = MODEL_META[key] ?? DEFAULT_META
   const lod = new THREE.LOD()
 
-  // Level 0: detailed geometry (close range)
   lod.addLevel(detailed, 0)
 
-  // Level 1: simple box (far range, > 60 units)
   const simpleH = meta.h
   const simpleMat = new THREE.MeshLambertMaterial({ color: new THREE.Color(meta.color) })
   const simpleBox = new THREE.Mesh(new THREE.BoxGeometry(width, simpleH, depth), simpleMat)
@@ -281,143 +264,107 @@ function buildLandmarkLOD(key: string, width: number, depth: number): THREE.Obje
   return lod
 }
 
-// ── Build a single building sized to its tile footprint ──────────────
-
-const MARGIN = 0.12  // gap between building edge and tile boundary
-
-function buildTexturedBox(
-  key: string,
-  heightScale: number,
-  tileW: number,
-  tileH: number,
-): THREE.Object3D {
-  const meta  = MODEL_META[key] ?? DEFAULT_META
-  const color = new THREE.Color(meta.color)
-
-  // Footprint: exactly tileW × tileH tiles, minus margin
-  const width  = tileW * TILE_SIZE - MARGIN * 2
-  const depth  = tileH * TILE_SIZE - MARGIN * 2
-
-  // Height: base height × heightScale with slight random variation
-  const hv     = 0.85 + sr() * 0.3
-  const height = meta.h * heightScale * hv
-
-  const { facade, roof } = getBuildingTextures(key)
-
-  const facadeKey = `facade:${key}`
-  const roofKey   = `roof:${key}`
-  const bottomKey = 'bottom'
-  if (!matCache.has(facadeKey)) matCache.set(facadeKey, new THREE.MeshLambertMaterial({ map: facade }))
-  if (!matCache.has(roofKey))   matCache.set(roofKey,   new THREE.MeshLambertMaterial({ map: roof }))
-  if (!matCache.has(bottomKey)) matCache.set(bottomKey, new THREE.MeshLambertMaterial({ color: 0x222222 }))
-  const facadeMat = matCache.get(facadeKey)!
-  const roofMat   = matCache.get(roofKey)!
-  const bottomMat = matCache.get(bottomKey)!
-
-  const materials = [
-    facadeMat, facadeMat,   // +x, -x
-    roofMat,   bottomMat,   // +y, -y
-    facadeMat, facadeMat,   // +z, -z
-  ]
-
-  const obj = new THREE.Object3D()
-
-  // Main body
-  const geom = new THREE.BoxGeometry(width, height, depth)
-  const mesh = new THREE.Mesh(geom, materials)
-  mesh.castShadow    = false
-  mesh.receiveShadow = false
-  mesh.position.y    = height / 2
-  obj.add(mesh)
-
-  // Stepped setback for tall buildings
-  if (meta.h >= 4.0 && sr() > 0.4) {
-    const setbackH = height * (0.12 + sr() * 0.18)
-    const setbackW = width * 0.65
-    const setbackD = depth * 0.65
-    const setbackGeom = new THREE.BoxGeometry(setbackW, setbackH, setbackD)
-    const setbackMat = new THREE.MeshLambertMaterial({ color: color.clone().multiplyScalar(0.9) })
-    const setback = new THREE.Mesh(setbackGeom, [
-      setbackMat, setbackMat,
-      roofMat, setbackMat,
-      setbackMat, setbackMat,
-    ])
-    setback.castShadow = true
-    setback.position.y = height + setbackH / 2
-    obj.add(setback)
-  }
-
-  // Rooftop antenna for some tall buildings
-  if (meta.h >= 3.5 && sr() > 0.55) {
-    const antennaH = height * (0.08 + sr() * 0.12)
-    const antennaGeom = new THREE.CylinderGeometry(0.02, 0.04, antennaH, 4)
-    const antennaMat = new THREE.MeshLambertMaterial({ color: 0x888888 })
-    const antenna = new THREE.Mesh(antennaGeom, antennaMat)
-    antenna.castShadow = true
-    antenna.position.y = height + antennaH / 2
-    antenna.position.x = (sr() - 0.5) * width * 0.2
-    antenna.position.z = (sr() - 0.5) * depth * 0.2
-    obj.add(antenna)
-  }
-
-  return obj
-}
-
 // ── Public API ────────────────────────────────────────────────────────
 
 export interface Buildings3DHandle {
-  group:   THREE.Group
+  group:     THREE.Group
   updateLOD: (camera: THREE.Camera) => void
-  dispose: () => void
+  dispose:   () => void
 }
+
+const MARGIN = 0.12  // gap between building edge and tile boundary
 
 export async function buildBuildings3D(objects: SceneObject[]): Promise<Buildings3DHandle> {
   const group = new THREE.Group()
   _seed = 12345
 
+  // ── Collect instanced groups (non-landmark buildings) ──────────────
+  type BuildingSpec = { posX: number; posZ: number; height: number }
+  type BuildingGroup = { pngKey: string; tileW: number; tileH: number; specs: BuildingSpec[] }
+  const buildingGroups = new Map<string, BuildingGroup>()
+
   objects.forEach(obj => {
     const key = obj.pngKey ?? ''
-    if (!key) return
-    if (isFurnitureKey(key)) return
+    if (!key || isFurnitureKey(key) || isLandmarkKey(key)) return
 
-    const heightScale = obj.scale ?? 1
     const tileW = obj.tileW ?? 2
     const tileH = obj.tileH ?? 2
+    const groupKey = `${key}__${tileW}__${tileH}`
 
-    const posX = (obj.col + tileW / 2) * TILE_SIZE
-    const posZ = (obj.row + tileH / 2) * TILE_SIZE
-
-    let instance: THREE.Object3D
-
-    if (isLandmarkKey(key)) {
-      const width = tileW * TILE_SIZE - MARGIN * 2
-      const depth = tileH * TILE_SIZE - MARGIN * 2
-      const lm = buildLandmarkLOD(key, width, depth)
-      if (!lm) return
-      instance = lm
-    } else {
-      instance = buildTexturedBox(key, heightScale, tileW, tileH)
+    if (!buildingGroups.has(groupKey)) {
+      buildingGroups.set(groupKey, { pngKey: key, tileW, tileH, specs: [] })
     }
 
-    instance.position.x = posX
-    instance.position.z = posZ
-    group.add(instance)
+    const meta    = MODEL_META[key] ?? DEFAULT_META
+    const hv      = 0.85 + sr() * 0.3
+    const height  = meta.h * (obj.scale ?? 1) * hv
+    const posX    = (obj.col + tileW / 2) * TILE_SIZE
+    const posZ    = (obj.row + tileH / 2) * TILE_SIZE
+
+    buildingGroups.get(groupKey)!.specs.push({ posX, posZ, height })
+  })
+
+  // ── Build one InstancedMesh per group ──────────────────────────────
+  const localMeshes: THREE.InstancedMesh[] = []
+  const dummy = new THREE.Object3D()
+
+  buildingGroups.forEach(grp => {
+    const { pngKey, tileW, tileH, specs } = grp
+    if (specs.length === 0) return
+
+    const width = tileW * TILE_SIZE - MARGIN * 2
+    const depth = tileH * TILE_SIZE - MARGIN * 2
+
+    // Unit-height box; Y-scale per instance encodes actual height.
+    const geo = new THREE.BoxGeometry(width, 1, depth)
+
+    const { facade, roof } = getBuildingTextures(pngKey)
+    const facadeMat = getOrCreateMat(`facade:${pngKey}`, () => new THREE.MeshLambertMaterial({ map: facade }))
+    const roofMat   = getOrCreateMat(`roof:${pngKey}`,   () => new THREE.MeshLambertMaterial({ map: roof   }))
+    const bottomMat = getOrCreateMat('bottom',           () => new THREE.MeshLambertMaterial({ color: 0x222222 }))
+
+    const materials = [facadeMat, facadeMat, roofMat, bottomMat, facadeMat, facadeMat]
+
+    const mesh = new THREE.InstancedMesh(geo, materials, specs.length)
+    mesh.castShadow    = false
+    mesh.receiveShadow = false
+
+    specs.forEach((spec: BuildingSpec, i: number) => {
+      dummy.position.set(spec.posX, spec.height / 2, spec.posZ)
+      dummy.scale.set(1, spec.height, 1)
+      dummy.updateMatrix()
+      mesh.setMatrixAt(i, dummy.matrix)
+    })
+    mesh.instanceMatrix.needsUpdate = true
+
+    group.add(mesh)
+    localMeshes.push(mesh)
+  })
+
+  // ── Landmarks: keep full procedural LOD geometry ───────────────────
+  objects.forEach(obj => {
+    const key = obj.pngKey ?? ''
+    if (!key || !isLandmarkKey(key)) return
+
+    const tileW = obj.tileW ?? 2
+    const tileH = obj.tileH ?? 2
+    const width = tileW * TILE_SIZE - MARGIN * 2
+    const depth = tileH * TILE_SIZE - MARGIN * 2
+    const lm = buildLandmarkLOD(key, width, depth)
+    if (!lm) return
+
+    lm.position.set((obj.col + tileW / 2) * TILE_SIZE, 0, (obj.row + tileH / 2) * TILE_SIZE)
+    group.add(lm)
   })
 
   function updateLOD(camera: THREE.Camera) {
     group.traverse(child => {
-      if (child instanceof THREE.LOD) {
-        child.update(camera)
-      }
+      if (child instanceof THREE.LOD) child.update(camera)
     })
   }
 
   function dispose() {
-    group.traverse(child => {
-      if (child instanceof THREE.Mesh) {
-        child.geometry.dispose()
-      }
-    })
+    localMeshes.forEach(m => m.geometry.dispose())
     matCache.forEach(m => {
       if (m.map) m.map.dispose()
       m.dispose()

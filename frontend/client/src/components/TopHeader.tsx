@@ -3,6 +3,7 @@
  * 包含：系统标题、虚拟时间、天气、全局统计、新闻滚动条
  */
 
+import { memo, useMemo } from "react";
 import { WEATHER_ICONS } from "@/types/world";
 import type { WorldState } from "@/types/world";
 import { Badge } from "@/components/ui/badge";
@@ -15,23 +16,28 @@ interface Props {
   onEngineUrlChange: (url: string) => void;
 }
 
-export default function TopHeader({ world, isConnected, lastUpdated, engineUrl, onEngineUrlChange }: Props) {
+function TopHeader({ world, isConnected, lastUpdated, engineUrl, onEngineUrlChange }: Props) {
   const time = world?.time;
   const weather = world?.weather;
   const weatherIcon = weather ? (WEATHER_ICONS[weather.current] || "🌤️") : "🌤️";
 
-  const aliveBots = world ? Object.values(world.bots).filter(b => b.status === "alive").length : 0;
-  const totalMoney = world ? Object.values(world.bots).reduce((s, b) => s + (b.money || 0), 0) : 0;
-  const avgHappiness = world
-    ? Math.round(Object.values(world.bots).reduce((s, b) => s + (b.emotions?.happiness || 0), 0) / Math.max(aliveBots, 1))
-    : 0;
+  const stats = useMemo(() => {
+    if (!world) return { aliveBots: 0, totalMoney: 0, avgHappiness: 0 };
+    const bots = Object.values(world.bots);
+    const alive = bots.filter(b => b.status === "alive");
+    const totalMoney = bots.reduce((s, b) => s + (b.money || 0), 0);
+    const avgHappiness = alive.length > 0
+      ? Math.round(alive.reduce((s, b) => s + (b.emotions?.happiness || 0), 0) / alive.length)
+      : 0;
+    return { aliveBots: alive.length, totalMoney, avgHappiness };
+  }, [world]);
 
-  const newsItems = world?.news_feed || [];
-  const hotTopics = world?.hot_topics || [];
-  const allNews = [
-    ...newsItems.map(n => `【${n.source}】${n.headline}`),
-    ...hotTopics.map(t => `🔥 ${t}`),
-  ];
+  const { aliveBots, totalMoney, avgHappiness } = stats;
+
+  const allNews = useMemo(() => [
+    ...(world?.news_feed || []).map(n => `【${n.source}】${n.headline}`),
+    ...(world?.hot_topics || []).map(t => `🔥 ${t}`),
+  ], [world?.news_feed, world?.hot_topics]);
 
   return (
     <header className="shrink-0 flex flex-col glass-panel-solid border-t-0 border-x-0">
@@ -129,6 +135,8 @@ export default function TopHeader({ world, isConnected, lastUpdated, engineUrl, 
     </header>
   );
 }
+
+export default memo(TopHeader)
 
 function StatItem({ label, value, className }: { label: string; value: string; className: string }) {
   return (
