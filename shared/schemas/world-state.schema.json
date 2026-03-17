@@ -1,0 +1,73 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "shenzhen-shared/schemas/world-state.schema.json",
+  "title": "WorldState",
+  "description": "深圳生存模拟 - GET /world 响应结构（world engine ↔ pixel city 共享）",
+  "type": "object",
+  "required": ["time", "weather", "bots", "locations", "news_feed", "hot_topics"],
+  "properties": {
+    "time": {
+      "type": "object",
+      "required": ["tick", "virtual_hour", "virtual_day", "virtual_datetime"],
+      "properties": {
+        "tick":             { "type": "integer", "minimum": 0 },
+        "virtual_hour":     { "type": "integer", "minimum": 0, "maximum": 23 },
+        "virtual_day":      { "type": "integer", "minimum": 1 },
+        "virtual_datetime": { "type": "string" }
+      }
+    },
+    "weather": {
+      "type": "object",
+      "required": ["current", "desc"],
+      "properties": {
+        "current":        { "type": "string" },
+        "desc":           { "type": "string" },
+        "changed_at_tick":{ "type": "integer" }
+      }
+    },
+    "bots": {
+      "type": "object",
+      "additionalProperties": { "$ref": "bot-state.schema.json" }
+    },
+    "locations": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["desc", "type", "bots"],
+        "properties": {
+          "desc":           { "type": "string" },
+          "type":           { "type": "string", "enum": ["residential", "business", "commercial", "leisure"] },
+          "bots":           { "type": "array", "items": { "type": "string" } },
+          "npcs":           { "type": "array" },
+          "jobs":           { "type": "array" },
+          "vibe":           { "type": "string" },
+          "public_memory":  { "type": "array" },
+          "modifications":  { "type": "array" }
+        }
+      }
+    },
+    "news_feed": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "headline": { "type": "string" },
+          "source":   { "type": "string" },
+          "tick":     { "type": "integer" },
+          "time":     { "type": "string" }
+        }
+      }
+    },
+    "hot_topics":        { "type": "array", "items": { "type": "string" } },
+    "events":            { "type": "array" },
+    "moments":           { "type": "array" },
+    "world_narrative":   { "type": "string" },
+    "world_modifications":{ "type": "array" },
+    "urban_legends":     { "type": "array" },
+    "graveyard":         { "type": "array" },
+    "generation_count":  { "type": "integer", "minimum": 0 },
+    "reputation_board":  { "type": "object" },
+    "active_rules":      { "type": "array" },
+    "food_prices":       { "type": "object" }
+  }
+}

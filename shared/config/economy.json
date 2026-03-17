@@ -1,0 +1,33 @@
+{
+  "_comment": "经济系统配置（单一来源）",
+  "daily_rent": {
+    "宝安城中村": 15,
+    "南山公寓": 50
+  },
+  "daily_misc_cost": 5,
+  "food_menu": {
+    "城中村快餐": { "cost": 5,  "satiety": 40, "mood": { "happiness": 1 } },
+    "路边摊炒粉": { "cost": 12, "satiety": 50, "mood": { "happiness": 5 } },
+    "便利店饭团": { "cost": 8,  "satiety": 30, "mood": { "happiness": 1 } },
+    "麦当劳套餐": { "cost": 35, "satiety": 60, "mood": { "happiness": 8 } },
+    "火锅":       { "cost": 80, "satiety": 90, "mood": { "happiness": 8, "loneliness": -5 } },
+    "泡面":       { "cost": 3,  "satiety": 25, "mood": { "sadness": 3 } },
+    "奶茶":       { "cost": 15, "satiety": 10, "mood": { "happiness": 4, "anxiety": -2 } }
+  },
+  "aging": {
+    "base_per_tick": 0.5,
+    "hunger_multiplier": 5.0,
+    "overwork_multiplier": 3.0,
+    "sick_multiplier": 2.0,
+    "elderly_threshold": 70,
+    "elderly_extra_hp_loss": 2.0,
+    "middle_age_threshold": 55,
+    "middle_age_extra_hp_loss": 0.5
+  },
+  "energy": {
+    "day_cost_per_tick": 2,
+    "night_recover_per_tick": 5,
+    "sleep_recover_per_tick": 15,
+    "satiety_decay_per_tick": 2
+  }
+}

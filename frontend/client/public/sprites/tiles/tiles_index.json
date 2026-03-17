@@ -1,0 +1,20 @@
+{
+  "tileSize": 64,
+  "tiles": {
+    "road_h": 0,
+    "road_v": 1,
+    "road_cross": 2,
+    "sidewalk": 3,
+    "sidewalk_edge": 4,
+    "grass": 5,
+    "grass_lush": 6,
+    "water": 7,
+    "water_edge": 8,
+    "concrete": 9,
+    "tile_plaza": 10,
+    "building": 11,
+    "park_path": 12,
+    "fence_green": 13,
+    "alley": 14
+  }
+}

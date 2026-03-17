@@ -1,0 +1,82 @@
+{
+  "_comment": "深圳生存模拟 - 地点配置（单一来源，两个项目共用）",
+  "locations": {
+    "宝安城中村": {
+      "desc": "密密麻麻的握手楼，便宜但嘈杂",
+      "type": "residential",
+      "rent": 15,
+      "pixel_city": {
+        "scene": "baoan_village",
+        "icon": "🏚️",
+        "map_x": 15,
+        "map_y": 45
+      }
+    },
+    "南山科技园": {
+      "desc": "高新技术企业聚集地",
+      "type": "business",
+      "rent": null,
+      "pixel_city": {
+        "scene": "nanshan_tech",
+        "icon": "🏢",
+        "map_x": 35,
+        "map_y": 25
+      }
+    },
+    "福田CBD": {
+      "desc": "金融中心，高楼林立",
+      "type": "business",
+      "rent": null,
+      "pixel_city": {
+        "scene": "futian_cbd",
+        "icon": "🏦",
+        "map_x": 60,
+        "map_y": 20
+      }
+    },
+    "华强北": {
+      "desc": "电子产品集散地，人流密集",
+      "type": "commercial",
+      "rent": null,
+      "pixel_city": {
+        "scene": "huaqiangbei",
+        "icon": "📱",
+        "map_x": 50,
+        "map_y": 50
+      }
+    },
+    "东门老街": {
+      "desc": "传统商业街，日结工多",
+      "type": "commercial",
+      "rent": null,
+      "pixel_city": {
+        "scene": "dongmen",
+        "icon": "🏮",
+        "map_x": 70,
+        "map_y": 55
+      }
+    },
+    "南山公寓": {
+      "desc": "白领合租公寓",
+      "type": "residential",
+      "rent": 50,
+      "pixel_city": {
+        "scene": "nanshan_apt",
+        "icon": "🏠",
+        "map_x": 25,
+        "map_y": 65
+      }
+    },
+    "深圳湾公园": {
+      "desc": "海边公园，适合散步思考",
+      "type": "leisure",
+      "rent": null,
+      "pixel_city": {
+        "scene": "shenzhen_bay",
+        "icon": "🌊",
+        "map_x": 40,
+        "map_y": 80
+      }
+    }
+  }
+}

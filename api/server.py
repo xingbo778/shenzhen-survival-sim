@@ -62,6 +62,14 @@ def get_world():
                 # v10.0
                 "last_action_feedback": bot.get("last_action_feedback", {}),
                 "action_log": bot.get("action_log", [])[-10:],
+                # v11: 劳动力市场
+                "aspiration_level": round(bot.get("aspiration_level", 30.0), 1),
+                "risk_tolerance": round(bot.get("risk_tolerance", 0.5), 2),
+                "_low_motivation_ticks": bot.get("_low_motivation_ticks", 0),
+                "known_opportunities": sorted(
+                    bot.get("known_opportunities", {}).values(),
+                    key=lambda x: x.get("wage_estimate", 0), reverse=True
+                )[:5],
             }
         for loc_name, loc_data in world["locations"].items():
             safe["locations"][loc_name] = {
@@ -70,10 +78,11 @@ def get_world():
                 "bots": loc_data["bots"],
                 "npcs": [{"name": n["name"], "role": n["role"]} for n in loc_data["npcs"]],
                 "jobs": [{"title": j["title"], "pay": j["pay"]} for j in loc_data.get("jobs", [])],
+                "vibe": loc_data.get("vibe", "普通"),
+                "modification_count": len(loc_data.get("modifications", [])),
                 # v9.0
                 "public_memory": loc_data.get("public_memory", [])[-5:],
                 "modifications": loc_data.get("modifications", []),
-                "vibe": loc_data.get("vibe", "普通"),
             }
         # v9.0: 添加进化引擎数据
         safe["world_modifications"] = world.get("world_modifications", [])[-20:]
@@ -431,6 +440,22 @@ async def save_snapshot():
         with open("/home/ubuntu/world_state_snapshot.json", "w") as f:
             json.dump(snapshot, f, ensure_ascii=False, indent=2)
     return {"ok": True, "tick": world["time"]["tick"]}
+
+
+@app.get("/market")
+def get_market():
+    """劳动力市场竞争状态"""
+    with lock:
+        return {
+            "job_market": world.get("job_market", {}),
+            "summary": {
+                loc: {
+                    skill: round(data.get("pressure", 0), 1)
+                    for skill, data in skills.items()
+                }
+                for loc, skills in world.get("job_market", {}).items()
+            }
+        }
 
 
 # 静态文件服务

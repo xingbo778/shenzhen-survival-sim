@@ -1,0 +1,31 @@
+{
+  "_comment": "活动→地块偏好映射（供 pixel-city 前端使用，与 survival-sim 活动对齐）",
+  "activity_tile_preferences": {
+    "work": ["office", "shop", "factory", "outdoor"],
+    "吃饭": ["restaurant", "food_stall", "convenience"],
+    "eating": ["restaurant", "food_stall", "convenience"],
+    "sleep": ["residential", "indoor"],
+    "睡觉": ["residential", "indoor"],
+    "休息": ["park", "residential", "indoor"],
+    "rest": ["park", "residential", "indoor"],
+    "shopping": ["shop", "market", "mall"],
+    "购物": ["shop", "market", "mall"],
+    "散步": ["park", "road", "outdoor"],
+    "walk": ["park", "road", "outdoor"],
+    "social": ["park", "restaurant", "plaza"],
+    "聊天": ["park", "restaurant", "plaza"],
+    "刷手机": ["any"],
+    "browse": ["any"],
+    "post_moment": ["any"],
+    "发朋友圈": ["any"]
+  },
+  "location_to_scene": {
+    "宝安城中村": "baoan_village",
+    "南山科技园": "nanshan_tech",
+    "福田CBD": "futian_cbd",
+    "华强北": "huaqiangbei",
+    "东门老街": "dongmen",
+    "南山公寓": "nanshan_apt",
+    "深圳湾公园": "shenzhen_bay"
+  }
+}

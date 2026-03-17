@@ -1,0 +1,205 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  /* 深圳城市主题色 */
+  --sz-bg: #060b14;
+  --sz-panel: #0d1a2e;
+  --sz-panel2: #0f2040;
+  --sz-border: rgba(77, 150, 255, 0.18);
+  --sz-blue: #4d96ff;
+  --sz-green: #6bcb77;
+  --sz-red: #ff6b6b;
+  --sz-yellow: #ffd93d;
+  --sz-purple: #c77dff;
+  --sz-cyan: #00f5ff;
+  --sz-orange: #ff9f43;
+  --sz-text: #c8d8f0;
+  --sz-text-dim: #5a7a9a;
+
+  /* 表面层级 */
+  --sz-surface-0: rgba(6, 11, 20, 0.98);
+  --sz-surface-1: rgba(13, 26, 46, 0.85);
+  --sz-surface-2: rgba(15, 32, 64, 0.7);
+  --sz-surface-3: rgba(255, 255, 255, 0.03);
+  --sz-border-subtle: rgba(255, 255, 255, 0.06);
+  --sz-border-default: rgba(255, 255, 255, 0.1);
+  --sz-border-accent: rgba(77, 150, 255, 0.25);
+}
+
+:root {
+  --radius: 0.5rem;
+  --background: oklch(0.06 0.02 240);
+  --foreground: oklch(0.85 0.03 220);
+  --card: oklch(0.1 0.025 240);
+  --card-foreground: oklch(0.85 0.03 220);
+  --popover: oklch(0.1 0.025 240);
+  --popover-foreground: oklch(0.85 0.03 220);
+  --primary: oklch(0.62 0.18 240);
+  --primary-foreground: oklch(0.98 0 0);
+  --secondary: oklch(0.15 0.02 240);
+  --secondary-foreground: oklch(0.7 0.03 220);
+  --muted: oklch(0.15 0.02 240);
+  --muted-foreground: oklch(0.5 0.03 220);
+  --accent: oklch(0.18 0.03 240);
+  --accent-foreground: oklch(0.85 0.03 220);
+  --destructive: oklch(0.65 0.22 25);
+  --destructive-foreground: oklch(0.98 0 0);
+  --border: oklch(0.25 0.04 240);
+  --input: oklch(0.18 0.03 240);
+  --ring: oklch(0.62 0.18 240);
+  --chart-1: oklch(0.62 0.18 240);
+  --chart-2: oklch(0.65 0.15 150);
+  --chart-3: oklch(0.7 0.18 60);
+  --chart-4: oklch(0.65 0.2 300);
+  --chart-5: oklch(0.65 0.2 25);
+  --sidebar: oklch(0.1 0.025 240);
+  --sidebar-foreground: oklch(0.85 0.03 220);
+  --sidebar-primary: oklch(0.62 0.18 240);
+  --sidebar-primary-foreground: oklch(0.98 0 0);
+  --sidebar-accent: oklch(0.15 0.02 240);
+  --sidebar-accent-foreground: oklch(0.85 0.03 220);
+  --sidebar-border: oklch(0.25 0.04 240);
+  --sidebar-ring: oklch(0.62 0.18 240);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: 'Noto Sans SC', sans-serif;
+    overflow: hidden;
+    height: 100vh;
+    background: var(--sz-bg);
+    color: var(--sz-text);
+  }
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]),
+  [type="button"]:not(:disabled),
+  [type="submit"]:not(:disabled),
+  [type="reset"]:not(:disabled),
+  a[href],
+  select:not(:disabled) {
+    @apply cursor-pointer;
+  }
+}
+
+/* ===== 玻璃拟态面板 ===== */
+.glass-panel {
+  background: var(--sz-surface-1);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--sz-border-subtle);
+  contain: layout style;
+}
+
+.glass-panel-solid {
+  background: var(--sz-surface-0);
+  backdrop-filter: blur(16px);
+  border: 1px solid var(--sz-border-default);
+  contain: layout style;
+}
+
+.glass-card {
+  background: var(--sz-surface-3);
+  border: 1px solid var(--sz-border-subtle);
+  border-radius: var(--radius);
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+.glass-card:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--sz-border-default);
+}
+
+/* ===== 字体 ===== */
+.font-orbitron { font-family: 'Orbitron', sans-serif; }
+.font-mono-data { font-family: 'JetBrains Mono', monospace; }
+.font-cn { font-family: 'Noto Sans SC', sans-serif; }
+
+/* ===== 滚动条 ===== */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.08); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.15); }
+
+/* ===== 动画 ===== */
+@keyframes fade-in-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes ticker-scroll {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+@keyframes slide-in-right {
+  from { transform: translateX(20px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+@keyframes slide-in-bottom {
+  from { transform: translateY(10px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+@keyframes float-zzz {
+  0% { opacity: 1; transform: translateY(0) scale(1); }
+  100% { opacity: 0; transform: translateY(-20px) scale(0.7); }
+}
+
+.animate-fade-in-up { animation: fade-in-up 0.3s ease-out; }
+.animate-ticker { animation: ticker-scroll 40s linear infinite; }
+.animate-slide-right { animation: slide-in-right 0.3s ease-out; }
+.animate-slide-bottom { animation: slide-in-bottom 0.3s ease-out; }
+.animate-float-zzz { animation: float-zzz 2s ease-out infinite; }
+
+@layer components {
+  .container {
+    width: 100%;
+    margin-left: auto;
+    margin-right: auto;
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+  .flex {
+    min-height: 0;
+    min-width: 0;
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "_comment": "5维情绪系统定义（共用）",
+  "dimensions": ["happiness", "sadness", "anger", "anxiety", "loneliness"],
+  "labels": {
+    "happiness": "开心",
+    "sadness": "难过",
+    "anger": "愤怒",
+    "anxiety": "焦虑",
+    "loneliness": "孤独"
+  },
+  "decay_per_tick": {
+    "happiness": -0.5,
+    "sadness": -1,
+    "anger": -2,
+    "anxiety": -0.5,
+    "loneliness": 0.5
+  },
+  "color_map": {
+    "happiness": "#FFD700",
+    "sadness": "#4169E1",
+    "anger": "#FF4500",
+    "anxiety": "#9932CC",
+    "loneliness": "#708090"
+  },
+  "emoji_map": {
+    "happiness": "😊",
+    "sadness": "😢",
+    "anger": "😡",
+    "anxiety": "😰",
+    "loneliness": "😔"
+  },
+  "defaults": {
+    "happiness": 50,
+    "sadness": 10,
+    "anger": 5,
+    "anxiety": 20,
+    "loneliness": 30
+  }
+}
