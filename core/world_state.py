@@ -37,6 +37,7 @@ world = {
     "graveyard": [],
     "reputation_board": {},
     "active_rules": [],
+    "job_market": {},
 }
 
 
@@ -93,6 +94,12 @@ def create_bot(bot_id):
         "generation": 0,          # 第几代bot
         "inherited_from": None,   # 继承自哪个死亡bot
         "known_legends": [],      # 知道的城市传说
+        # v11: 劳动力市场基础规则
+        "aspiration_level": max(20.0, p.get("money", 100) * 0.04),  # 初始期望 ≈ 资产的4%
+        "risk_tolerance": round(0.5 + random.uniform(-0.2, 0.2), 2),
+        "recent_outcomes": [],
+        "known_opportunities": {},
+        "_low_motivation_ticks": 0,
     }
 
 
@@ -181,7 +188,10 @@ def init_world():
                             "narrative_summary", "current_activity",
                             # v9.0
                             "reputation", "created_things", "generation",
-                            "inherited_from", "known_legends"]:
+                            "inherited_from", "known_legends",
+                            # v11
+                            "aspiration_level", "risk_tolerance", "recent_outcomes",
+                            "known_opportunities", "_low_motivation_ticks"]:
                     if key in bdata:
                         bot[key] = bdata[key]
                 # 家庭关系：如果快照中为空则用默认值

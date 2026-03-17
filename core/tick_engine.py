@@ -9,6 +9,8 @@ from systems.weather import update_weather
 from systems.news import inject_news
 from systems.events import trigger_event, trigger_personal_fate
 from systems.generation import spread_urban_legends, handle_bot_death
+from systems.labor_market import (update_job_market, spread_job_info,
+                                   compute_passive_income, update_adaptive_expectations)
 from utils.ai_client import client
 from rules.rules_engine import tick_rules
 
@@ -238,6 +240,7 @@ def world_tick():
                             bot["skills"][skill_key] = min(100, bot["skills"][skill_key] + random.randint(2, 4))
                         task["status"] = "completed"
                         task["result"] = f"成功完成! 赚了{pay}元" + (f"(含难点奖励{bonus}元)" if bonus else "")
+                        update_adaptive_expectations(bot, "success", pay)
                         # v8.3: 完成任务给予显著happiness奖励
                         emotions["happiness"] = min(100, emotions.get("happiness", 50) + 12)
                         emotions["anxiety"] = max(0, emotions.get("anxiety", 20) - 5)
@@ -250,6 +253,7 @@ def world_tick():
                             bot["skills"][skill_key] = min(100, bot["skills"][skill_key] + 1)
                         task["status"] = "failed"
                         task["result"] = f"任务失败了...只拿到{pay}元辛苦费"
+                        update_adaptive_expectations(bot, "failure", pay)
                         emotions["sadness"] = min(100, emotions.get("sadness", 10) + 5)
                         emotions["anxiety"] = min(100, emotions.get("anxiety", 20) + 3)
                         log.warning(f"{bid} 任务失败[{task['task_name']}]: 只拿到{pay}元")
@@ -368,6 +372,11 @@ def world_tick():
                     log.info(f"[RULES] {rn}")
         except Exception as e:
             log.error(f"[RULES] tick_rules失败: {e}")
+
+        # === v11: 劳动力市场四条基础规则 ===
+        update_job_market()
+        spread_job_info()
+        compute_passive_income()
 
         # 清理过期效果
         world["active_effects"] = [e for e in world["active_effects"] if e["expires_tick"] > t["tick"]]

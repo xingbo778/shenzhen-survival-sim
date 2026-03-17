@@ -6,6 +6,7 @@ from utils.ai_client import client, grok_generate
 from systems.reputation import update_reputation, reputation_interaction_modifier
 from systems.world_mods import judge_world_modification, add_public_memory
 from rules.rules_engine import generate_rules_from_action, get_attraction_signals
+from systems.labor_market import compute_wage, check_reservation_wage, update_adaptive_expectations
 
 
 def process_action(bot_id, plan):
@@ -215,6 +216,12 @@ def execute(bot_id, action):
             skill_key = job["skill"]
             skill_val = bot["skills"].get(skill_key, 0) if skill_key != "none" else 10
             if skill_val >= job["min_skill"]:
+                offered = compute_wage(job, loc, bot)
+                accept, floor = check_reservation_wage(bot, offered)
+                if not accept:
+                    update_adaptive_expectations(bot, "rejection")
+                    return (f"想在{loc}做{job['title']}，但出价{offered}元低于心理底线"
+                            f"{floor:.0f}元，决定不做这份工作。")
                 task_template = random.choice(job.get("tasks", [{"name": "工作", "duration": 2, "difficulty": 0.2, "desc": "日常工作"}]))
                 new_task = {
                     "job_title": job["title"],
@@ -223,7 +230,7 @@ def execute(bot_id, action):
                     "duration": task_template["duration"],
                     "difficulty": task_template["difficulty"],
                     "skill": skill_key,
-                    "base_pay": job["pay"] + random.randint(-10, 10),
+                    "base_pay": compute_wage(job, loc, bot),
                     "progress": 0,
                     "status": "in_progress",
                     "challenge": None,
