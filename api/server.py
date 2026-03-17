@@ -6,6 +6,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from core.world_state import world, lock, log, init_world
 from core.constants import AGING_BASE, PERSONAS
+from core.paths import SNAPSHOT, SELFIES_DIR, AVATARS_DIR, AVATARS_DIR2
 from actions.processor import process_action_v10
 
 app = FastAPI(title="深圳生存模拟 v9.0 - 自我进化")
@@ -437,7 +438,7 @@ async def save_snapshot():
                 "modifications": loc_data.get("modifications", []),
                 "vibe": loc_data.get("vibe", "普通"),
             }
-        with open("/home/ubuntu/world_state_snapshot.json", "w") as f:
+        with open(SNAPSHOT, "w") as f:
             json.dump(snapshot, f, ensure_ascii=False, indent=2)
     return {"ok": True, "tick": world["time"]["tick"]}
 
@@ -459,12 +460,10 @@ def get_market():
 
 
 # 静态文件服务
-if os.path.exists("/home/ubuntu/selfies"):
-    app.mount("/selfies", StaticFiles(directory="/home/ubuntu/selfies"), name="selfies")
+if os.path.exists(SELFIES_DIR):
+    app.mount("/selfies", StaticFiles(directory=SELFIES_DIR), name="selfies")
 
-avatar_dir = "/home/ubuntu/bot_avatars_v2"
-if not os.path.exists(avatar_dir):
-    avatar_dir = "/home/ubuntu/bot_avatars"
+avatar_dir = AVATARS_DIR if os.path.exists(AVATARS_DIR) else AVATARS_DIR2
 if os.path.exists(avatar_dir):
     app.mount("/avatars", StaticFiles(directory=avatar_dir), name="avatars")
 
@@ -507,7 +506,7 @@ def _do_auto_save():
                     "modifications": loc_data.get("modifications", []),
                     "vibe": loc_data.get("vibe", "普通"),
                 }
-            with open("/home/ubuntu/world_state_snapshot.json", "w") as f:
+            with open(SNAPSHOT, "w") as f:
                 json.dump(snapshot, f, ensure_ascii=False)
         log.info(f"自动快照已保存 (tick={world['time']['tick']})")
         log.info(f"  v9.0: {len(world.get('world_modifications',[]))}个世界改造, {len(world.get('urban_legends',[]))}个城市传说, {len(world.get('graveyard',[]))}个墓地记录")
@@ -544,7 +543,7 @@ def on_startup():
         if bot and bot["status"] == "alive":
             try:
                 subprocess.Popen(
-                    ["python3", "/home/ubuntu/shenzhen-survival-sim/bot_agent_v8.py"],
+                    ["python3", os.path.join(os.path.dirname(os.path.dirname(__file__)), "agents", "bot_agent.py")],
                     env=dict(os.environ, BOT_ID=bot_id)
                 )
                 log.info(f"Bot {bot_id} 进程已启动")

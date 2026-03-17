@@ -2,13 +2,11 @@ import os, json, random, logging
 from threading import Lock
 from .constants import (LOCATIONS, JOBS, PERSONAS, FAMILY_RELATIONS, EMOTION_DIMS,
                          BOT_DESIRE_PROFILES, DEFAULT_DESIRE_PROFILE)
-
-os.makedirs("/home/ubuntu/logs", exist_ok=True)
-os.makedirs("/home/ubuntu/selfies", exist_ok=True)
+from .paths import LOGS_DIR, SNAPSHOT
 
 log = logging.getLogger("world")
 log.setLevel(logging.DEBUG)
-fh = logging.FileHandler("/home/ubuntu/logs/world_engine.log", encoding="utf-8")
+fh = logging.FileHandler(os.path.join(LOGS_DIR, "world_engine.log"), encoding="utf-8")
 fh.setFormatter(logging.Formatter("%(asctime)s [WORLD] %(levelname)s %(message)s"))
 sh = logging.StreamHandler()
 sh.setFormatter(logging.Formatter("%(asctime)s [WORLD] %(levelname)s %(message)s"))
@@ -154,7 +152,7 @@ def init_world():
         }
 
     # 尝试从快照恢复
-    snapshot_path = "/home/ubuntu/world_state_snapshot.json"
+    snapshot_path = SNAPSHOT
     if os.path.exists(snapshot_path):
         try:
             with open(snapshot_path, "r") as f:

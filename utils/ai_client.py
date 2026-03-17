@@ -1,7 +1,10 @@
+import os
 from openai import OpenAI
 import json
 
-client = OpenAI()
+# World engine uses grok for image generation; OpenAI client is a placeholder
+# (bot_agent.py uses the real key). Set a dummy key to avoid startup error.
+client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY", "placeholder"))
 
 GROK_API_KEY = "xai-nEhwehTvY3UTrB0RpuDvkspHMMziJ9StfrPvQLaCXKHxCWT5w1ufUiUwpLPCVNstR01pynhDB902ybvB"
 

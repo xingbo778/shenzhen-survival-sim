@@ -1,7 +1,8 @@
-import json, random, logging, re
+import json, random, logging, re, os
 from threading import Thread
 from core.world_state import world, log, lock
 from core.constants import FOOD_MENU, JOBS, LOCATIONS, PERSONAS, EMOTION_DIMS, WEATHER_TYPES, DESIRE_DECAY_ON_FULFILL, DAILY_RENT, DAILY_MISC_COST
+from core.paths import SELFIES_DIR
 from utils.ai_client import client, grok_generate
 from systems.reputation import update_reputation, reputation_interaction_modifier
 from systems.world_mods import judge_world_modification, add_public_memory
@@ -794,7 +795,7 @@ warmth_delta范围-10到+10，正数表示关系升温，负数表示关系降�
         bot["selfie_count"] = bot.get("selfie_count", 0) + 1
         tick = world["time"]["tick"]
         filename = f"{bot_id}_day{world['time']['virtual_day']}_{tick}.jpg"
-        save_path = f"/home/ubuntu/selfies/{filename}"
+        save_path = os.path.join(SELFIES_DIR, filename)
         bot["phone_battery"] = max(0, bot.get("phone_battery", 100) - 5)
         emotions["happiness"] = min(100, emotions.get("happiness", 50) + 2)
         desires = bot.get("desires", {})

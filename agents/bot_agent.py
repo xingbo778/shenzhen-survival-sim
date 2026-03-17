@@ -26,11 +26,15 @@ from openai import OpenAI
 BOT_ID = os.environ.get("BOT_ID", "bot_1")
 WORLD_URL = os.environ.get("WORLD_ENGINE_URL", "http://localhost:8000")
 
-# 日志设置
-os.makedirs("/home/ubuntu/logs", exist_ok=True)
+# 路径兼容 Linux(/home/ubuntu) 和 macOS
+_data_dir = os.environ.get("SZ_DATA_DIR",
+    "/home/ubuntu" if os.path.exists("/home/ubuntu") else os.path.expanduser("~/.shenzhen-sim"))
+_logs_dir = os.path.join(_data_dir, "logs")
+os.makedirs(_logs_dir, exist_ok=True)
+
 log = logging.getLogger(BOT_ID)
 log.setLevel(logging.DEBUG)
-fh = logging.FileHandler(f"/home/ubuntu/logs/{BOT_ID}.log", encoding="utf-8")
+fh = logging.FileHandler(os.path.join(_logs_dir, f"{BOT_ID}.log"), encoding="utf-8")
 fh.setFormatter(logging.Formatter(f"%(asctime)s [{BOT_ID}] %(levelname)s %(message)s"))
 sh = logging.StreamHandler()
 sh.setFormatter(logging.Formatter(f"%(asctime)s [{BOT_ID}] %(levelname)s %(message)s"))
@@ -109,7 +113,7 @@ persona = PERSONAS.get(BOT_ID, PERSONAS["bot_1"])
 
 # v9.0: 支持代际传承 - 读取人设覆盖文件
 try:
-    override_path = f"/home/ubuntu/persona_override_{BOT_ID}.json"
+    override_path = os.path.join(_data_dir, f"persona_override_{BOT_ID}.json")
     if os.path.exists(override_path):
         with open(override_path, "r") as f:
             override = json.load(f)
