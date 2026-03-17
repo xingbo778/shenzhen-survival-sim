@@ -1,7 +1,7 @@
 import json, random, logging, re
 from threading import Thread
 from core.world_state import world, log, lock
-from core.constants import FOOD_MENU, JOBS, LOCATIONS, PERSONAS, EMOTION_DIMS, WEATHER_TYPES, DESIRE_DECAY_ON_FULFILL
+from core.constants import FOOD_MENU, JOBS, LOCATIONS, PERSONAS, EMOTION_DIMS, WEATHER_TYPES, DESIRE_DECAY_ON_FULFILL, DAILY_RENT, DAILY_MISC_COST
 from utils.ai_client import client, grok_generate
 from systems.reputation import update_reputation, reputation_interaction_modifier
 from systems.world_mods import judge_world_modification, add_public_memory
@@ -217,8 +217,11 @@ def execute(bot_id, action):
             skill_val = bot["skills"].get(skill_key, 0) if skill_key != "none" else 10
             if skill_val >= job["min_skill"]:
                 offered = compute_wage(job, loc, bot)
+                # 生存兜底：钱不够交房租时，跳过心理底线检查
+                survival_threshold = DAILY_RENT.get(bot.get("home", "宝安城中村"), 15) + DAILY_MISC_COST
+                desperate = bot.get("money", 0) < survival_threshold
                 accept, floor = check_reservation_wage(bot, offered)
-                if not accept:
+                if not accept and not desperate:
                     update_adaptive_expectations(bot, "rejection")
                     return (f"想在{loc}做{job['title']}，但出价{offered}元低于心理底线"
                             f"{floor:.0f}元，决定不做这份工作。")
@@ -230,7 +233,7 @@ def execute(bot_id, action):
                     "duration": task_template["duration"],
                     "difficulty": task_template["difficulty"],
                     "skill": skill_key,
-                    "base_pay": compute_wage(job, loc, bot),
+                    "base_pay": offered,
                     "progress": 0,
                     "status": "in_progress",
                     "challenge": None,

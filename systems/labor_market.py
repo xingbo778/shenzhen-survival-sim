@@ -7,7 +7,7 @@
 """
 import random
 from core.world_state import world, log
-from core.constants import JOBS, LOCATIONS
+from core.constants import JOBS
 
 
 def update_job_market():
@@ -165,7 +165,7 @@ def spread_job_info():
                     key = f"{other_loc}:{job['title']}"
                     if key not in known:
                         noise = (1 - closeness / 100) * 0.4
-                        est = compute_wage(job, other_loc, other)
+                        est = compute_wage(job, other_loc, bot)
                         noisy = int(est * (1 + random.uniform(-noise, noise)))
                         known[key] = {
                             "location": other_loc,

@@ -95,7 +95,7 @@ def create_bot(bot_id):
         "inherited_from": None,   # 继承自哪个死亡bot
         "known_legends": [],      # 知道的城市传说
         # v11: 劳动力市场基础规则
-        "aspiration_level": max(20.0, p.get("money", 100) * 0.04),  # 初始期望 ≈ 资产的4%
+        "aspiration_level": max(20.0, min(60.0, p.get("money", 100) * 0.015)),  # 初始期望，上限60（对应最高薪工作），避免富人因期望过高无法工作
         "risk_tolerance": round(0.5 + random.uniform(-0.2, 0.2), 2),
         "recent_outcomes": [],
         "known_opportunities": {},

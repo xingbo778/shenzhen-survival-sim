@@ -197,9 +197,13 @@ def test_rent_deduction():
     rent = DAILY_RENT.get(home, 15)
     expected_cost = rent + DAILY_MISC_COST
     money_before = bot["money"]
+    # mock 掉随机事件和规则引擎，确保只有房租一项扣款
     with mock.patch('utils.ai_client.client', client), \
          mock.patch('core.tick_engine.client', client), \
-         mock.patch('systems.news.client', client):
+         mock.patch('systems.news.client', client), \
+         mock.patch('systems.events.trigger_event'), \
+         mock.patch('systems.events.trigger_personal_fate'), \
+         mock.patch('rules.rules_engine.tick_rules', return_value=[]):
         core.tick_engine.world_tick()
     money_after = world["bots"]["bot_1"]["money"]
     assert money_after == money_before - expected_cost, \
@@ -222,7 +226,10 @@ def test_eviction_when_broke():
     bot["location"] = bot["home"]  # 确保在家
     with mock.patch('utils.ai_client.client', client), \
          mock.patch('core.tick_engine.client', client), \
-         mock.patch('systems.news.client', client):
+         mock.patch('systems.news.client', client), \
+         mock.patch('systems.events.trigger_event'), \
+         mock.patch('systems.events.trigger_personal_fate'), \
+         mock.patch('rules.rules_engine.tick_rules', return_value=[]):
         core.tick_engine.world_tick()
     bot = world["bots"]["bot_1"]
     assert bot["money"] == 0, "钱应该是 0"
@@ -644,8 +651,8 @@ def test_rules_engine_tick():
         init_world()
     assert len(world["active_rules"]) > 0, "应有种子规则"
     initial_rules = len(world["active_rules"])
-    # 跑几轮，规则应该在执行（execution_count 增加或 durability 减少）
-    for _ in range(3):
+    # 跑10轮，确保有足够机会触发（15%概率×10轮×多个bot，统计上必然执行）
+    for _ in range(10):
         with mock.patch('utils.ai_client.client', client), \
              mock.patch('core.tick_engine.client', client), \
              mock.patch('systems.news.client', client):

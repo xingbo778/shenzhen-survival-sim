@@ -57,6 +57,7 @@ def world_tick():
         t["tick"] += 1
         t["virtual_hour"] = (6 + t["tick"]) % 24
         t["virtual_day"] = 1 + t["tick"] // 24
+        update_job_market()  # 先更新竞争状态，本 tick 内所有工资计算都用最新数据
         vd = t['virtual_day']; vh = t['virtual_hour']
         t['virtual_datetime'] = f'第{vd}天 {vh:02d}:00'
 
@@ -374,7 +375,6 @@ def world_tick():
             log.error(f"[RULES] tick_rules失败: {e}")
 
         # === v11: 劳动力市场四条基础规则 ===
-        update_job_market()
         spread_job_info()
         compute_passive_income()
 
